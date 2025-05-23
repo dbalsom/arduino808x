@@ -1,8 +1,8 @@
-# Arduino8088
+# Arduino808X
 ![arduino8088_pcb](/images/render_v1_1.png)
 
-### About Arduino8088
-I've writtten a blog article that gives an overview of this project and how it is used.
+### About Arduino808X
+I've written a blog article that gives an overview of this project and how it is used.
 
 https://martypc.blogspot.com/2023/06/hardware-validating-emulator.html
 
@@ -15,7 +15,7 @@ Where it differs from Raspberry Pi based projects is that it uses an Arduino DUE
 
 The board supports an Intel 8288 bus controller which can produce bus signals, but this chip is optional as the sketch can perform i8288 emulation.
 
-The original Arduino8088 board utilized an Arduino MEGA, but this board is now considered deprecated for this project. As of the current release, an [Arduino DUE](https://store.arduino.cc/products/arduino-due) should be used instead. Although the DUE has 3v GPIO, the current board design is modified for 3V operation.  The 80C88 itself tolerates 3V well, and i8288 emulation can be used if you lack a CMOS 8288.
+The original Arduino808X board utilized an Arduino MEGA, but this board is now considered deprecated for this project. As of the current release, an [Arduino DUE](https://store.arduino.cc/products/arduino-due) should be used instead. Although the DUE has 3v GPIO, the current board design is modified for 3V operation.  The 80C88 itself tolerates 3V well, and i8288 emulation can be used if you lack a CMOS 8288.
 
 I have been using this project to validate the cycle-accuracy of my PC emulator, MartyPC: https://github.com/dbalsom/martypc 
 
@@ -37,11 +37,11 @@ https://github.com/homebrew8088/pi86
 
 If you don't want to order and build the PCB, connect the GPIO pins to the CPU on a breadboard as specified in the KiCad project schematic.
 
-The main Arduino8088 sketch, cpu_server, operates a simple binary serial protocol to execute operations on the CPU and read and write data, status and control signals. This is designed for integration with an emulator or instruction test generator.
+The main Arduino808X sketch, cpu_server, operates a simple binary serial protocol to execute operations on the CPU and read and write data, status and control signals. This is designed for integration with an emulator or instruction test generator.
 
-Additionally there is a sketch, 'run_program', that will take any user-supplied register state and array of instruction bytes defined in the source code, execute it, and print cycle traces and final register state. This is useful for investigating the timing and operation of certain instructions without needing any external software integrations, however it is restricted in the number of memory reads or writes it can support, due to the limited RAM on the Arduino MEGA (8k!) 'run_program' does not currently support the DUE.
+Additionally, there is a sketch, 'run_program', that will take any user-supplied register state and array of instruction bytes defined in the source code, execute it, and print cycle traces and final register state. This is useful for investigating the timing and operation of certain instructions without needing any external software integrations, however it is restricted in the number of memory reads or writes it can support, due to the limited RAM on the Arduino MEGA (8k!) 'run_program' does not currently support the DUE.
 
-An example client for cpu_server is provded, written in Rust, in the client directory. It demonstrates how to upload arbitrary code to the Arduino8088 and display cycle traces. The client will emulate the entire address space and set up a basic IVT.
+An example application for cpu_server is provided, written in Rust, in the /crates/exec_program directory. It demonstrates how to upload arbitrary code to the Arduino808X and display cycle traces. The client will emulate the entire address space and set up a basic IVT.
 
 ## PCB
 ![pcb_shield50](/images/pcb_v1_1.png)
@@ -87,3 +87,38 @@ https://www.amazon.com/Treedix-Stacking-Headers-Stackable-Compatible/dp/B08G4FGB
   - https://www.amazon.com/Ultra-Compact-RS232-Converter-1Mbps/dp/B074BMLM11 (male)
   - https://www.amazon.com/Ultra-Compact-RS232-Converter-Female/dp/B074BTGLJN (female)
   - WARNING: DO NOT connect 5V to rs232 board on DUE 
+
+# Project Structure
+
+## /asm
+
+Assembly language files, intended to be assembled with NASM. To execute code on the Arduino808X, one must supply two
+binary files, one containing the program to be executed, and one containing the register values to load onto the CPU
+before program execution. 
+
+## /crates/ard808x_client
+
+A library crate that implements a client for the Arduino808X's serial protocol.
+
+## /crates/ard808x_cpu
+
+A library crate built on top of the `ard808x_client` crate, this provides a `RemoteCpu` struct that models CPU state 
+and can execute programs.
+
+## /crates/exec_program
+
+A binary implementing an interface for the `ard808x_cpu` crate that will load a provided register state binary and 
+execute the specified program binary.
+
+## /pcb
+
+Contains the KiCad project files and Gerber files for the Arduino808X PCB.
+
+## /sketches/cpu_server
+
+The main Arduino sketch for Arduino808X. Implements a server for a serial protocol enabling remote control of a 16-bit
+Intel CPU on the Arduino DUE.
+
+## /sketches/run_program
+
+An older sketch that can execute a program directly on the Arduino MEGA. Supports the 8088 only.

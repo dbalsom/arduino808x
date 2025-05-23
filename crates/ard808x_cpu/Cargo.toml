@@ -1,0 +1,19 @@
+[package]
+name = "ard808x_cpu"
+description = "A library crate that leverages the Arduino808x serial protocol to control an Intel 8088, 8086, NEC V20, or V30 CPU."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+
+[lib]
+name = "ard808x_cpu"
+path = "src/lib.rs"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+ard808x_client = { path = "../ard808x_client" }
+env_logger.workspace = true
+log.workspace = true

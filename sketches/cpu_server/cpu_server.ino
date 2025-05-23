@@ -1,5 +1,5 @@
 /*
-    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    Arduino8088 Copyright 2022-2025 Daniel Balsom
     https://github.com/dbalsom/arduino_8088
 
     Permission is hereby granted, free of charge, to any person obtaining a
@@ -46,7 +46,9 @@ registers LOAD_REGISTERS = {
   0x0000, // DI
 };
 
-// Register load routine.
+// Register load routine. This program gets patched with the client supplied register values.
+// It uses MOVs and POPs to set the register state as specified before the main program execution
+// begins.
 uint8_t LOAD_PROGRAM[] = {
   0x00, 0x00, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0x89, 0xC4, 0x9D, 0xBB, 0x00, 0x00, 0xB9, 0x00, 0x00,
   0xBA, 0x00, 0x00, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x00, 0x00, 0x8E, 0xD8, 0xB8, 0x00, 0x00,
@@ -54,31 +56,47 @@ uint8_t LOAD_PROGRAM[] = {
   0xC6, 0xB8, 0x00, 0x00, 0x89, 0xC7, 0xB8, 0x00, 0x00, 0xEA, 0x00, 0x00, 0x00, 0x00
 };
 
+// Patch offsets for load program
+const size_t LOAD_BX = 0x0B;
+const size_t LOAD_CX = 0x0E;
+const size_t LOAD_DX = 0x11;
+const size_t LOAD_SS = 0x14;
+const size_t LOAD_DS = 0x19;
+const size_t LOAD_ES = 0x1E;
+const size_t LOAD_SP = 0x23;
+const size_t LOAD_BP = 0x28;
+const size_t LOAD_SI = 0x2D;
+const size_t LOAD_DI = 0x32;
+const size_t LOAD_AX = 0x37;
+const size_t LOAD_IP = 0x3A;
+const size_t LOAD_CS = 0x3C;
+
+// CPU ID program. This is pretty simple - Intel CPUs have the undocumented and very fast instruction
+// SALC at D6 - NEC CPUs have an undefined alias for XLAT that takes a lot longer. We can simply
+// measure the execution time to determine Intel vs NEC.
+// This routine is run first, in the reset vector, before the Jump program.
+
+// Currently, this program must be able to be fetched in a single m-cycle, so it is limited to one
+// opcode and an optional NOP for 16-bit CPUs.
+const uint8_t CPUID_PROGRAM[] = {
+  0xD6, 0x90
+};
+
+// Far Jump program. We feed this program to the CPU at the reset vector. On an 8088 the reset 
+// vector is at FFFF:0000 or address FFFF0 - giving us only 16 bytes to the end of the address
+// space, where we will wrap around. We could wrap, but it gets a bit confusing, so instead 
+// we'll jump to a clean new segment. The exact segment is configurable with LOAD_SEG which
+// will get patched into this routine as the destination segment.
 uint8_t JUMP_VECTOR[] = {
   0xEA, 0x00, 0x00, 0x00, 0x00
 };
 
-// Patch offsets for load routine
-size_t LOAD_BX = 0x0B;
-size_t LOAD_CX = 0x0E;
-size_t LOAD_DX = 0x11;
-size_t LOAD_SS = 0x14;
-size_t LOAD_DS = 0x19;
-size_t LOAD_ES = 0x1E;
-size_t LOAD_SP = 0x23;
-size_t LOAD_BP = 0x28;
-size_t LOAD_SI = 0x2D;
-size_t LOAD_DI = 0x32;
-size_t LOAD_AX = 0x37;
-size_t LOAD_IP = 0x3A;
-size_t LOAD_CS = 0x3C;
-
 // Register store routine.
-// Four NOPs have been padded to the front of the STORE routine to hide it from appearing in cycle
-// traces (although we'd need 6 for 8086...). 
+// Six NOPs have been padded to the front of the STORE routine to hide it from appearing in cycle
+// traces.
 // We can probably think of a better way to hide STORE program bytes, as this adds several cycles.
 const uint8_t STORE_PROGRAM[] = {
-  0x90, 0x90, 0x90, 0x90,
+  0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
   0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x8C, 0xD0,
   0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x04, 0x00, 0x89, 0xC4,
   0x9C, 0xE8, 0x00, 0x00, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE,
@@ -111,6 +129,7 @@ command_func V_TABLE[] = {
   &cmd_cycle_get_cycle_state,
   &cmd_prefetch_store,
   &cmd_read_address,
+  &cmd_cpu_type,
   &cmd_invalid
 };
 
@@ -124,6 +143,10 @@ void setup() {
   Serial1.begin(DEBUG_BAUD_RATE);
   while (!SERIAL);
   while (!Serial1);
+  
+  // Wait for CPU to initialize
+  delayMicroseconds(200);
+  Serial1.write("Init\r\n", 6);  // More explicit raw write
 
   // Set all output pins to OUTPUT
   for( int p = 0; p < (sizeof OUTPUT_PINS / sizeof OUTPUT_PINS[0]); p++ ) {
@@ -143,19 +166,51 @@ void setup() {
   digitalWrite(AEN_PIN, LOW); // AEN is enable-low
   digitalWrite(CEN_PIN, HIGH); // Command enable enables the outputs on the i8288
 
-  // Wait for CPU to initialize
-  delayMicroseconds(100);
-
   // Patch the reset vector jump
   patch_vector(JUMP_VECTOR, LOAD_SEG);
+
+  cpu_id();
 
   CPU.v_state = Reset;
 
   beep(100);
   Serial1.println("Arduino8088 Server Initialized!");
+  Serial1.flush();
   clear_error();
   
   SERVER.c_state = WaitingForCommand;
+}
+
+bool cpu_id() {
+    if (!cpu_reset()) {
+        Serial1.println("Failed to reset CPU!");
+        set_error("Failed to reset CPU!");
+        return false;
+    }
+    change_state(CpuId);
+    uint32_t timeout = 0;
+    while (CPU.v_state != LoadDone) {
+        cycle();
+        timeout++;
+        if (timeout > 200) {
+            Serial1.println("CPU ID timeout!");
+            set_error("CPU ID timeout!");
+            return false;
+        }
+    }
+
+    size_t t_idx = CPU.cpu_type;
+    if (t_idx < CPU_TYPE_COUNT) {
+      Serial1.print("Detected CPU: ");
+      Serial1.print(CPU_TYPE_STRINGS[CPU.cpu_type]);
+      Serial1.println("");
+    }
+    else {
+      Serial1.println("Bad CPU type!");
+      return false;
+    }
+
+    return true;
 }
 
 void clear_error() {
@@ -171,7 +226,7 @@ void set_error(const char *msg) {
   error_beep();
 }
 
-// Send a failure code byte in reponse to a failed command
+// Send a failure code byte in response to a failed command
 void send_fail() {
   #if MODE_ASCII
     SERIAL.write(RESPONSE_CHRS[RESPONSE_FAIL]);
@@ -180,7 +235,7 @@ void send_fail() {
   #endif
 }
 
-// Send the success code byte in response to a succesful command
+// Send the success code byte in response to a successful command
 void send_ok() {
   #if MODE_ASCII
     SERIAL.write(RESPONSE_CHRS[RESPONSE_OK]);
@@ -214,6 +269,7 @@ bool cmd_version() {
   SERIAL.write((uint8_t *)VERSION_DAT, sizeof VERSION_DAT);
   SERIAL.write(VERSION_NUM);
   FLUSH;
+  delay(10); // let USB complete the transaction
   Serial1.println("Got version query!");
   return true;
 }
@@ -235,6 +291,15 @@ bool cmd_reset() {
     change_state(Execute);
   }
   return result;
+}
+
+// Server command - Cpu type
+// Return a 0 if an 8-bit CPU, 1 if a 16-bit CPU
+bool cmd_cpu_type() {
+  debug_cmd("CPU_TYPE", "In cmd");
+  snprintf(LAST_ERR, MAX_ERR_LEN, "NO ERROR");
+  SERIAL.write((uint8_t)CPU.width);
+  return true;
 }
 
 // Server command - Cycle
@@ -283,11 +348,7 @@ bool cmd_load() {
     return false;
   }
 
-  #if USE_LOAD_SEG
-    change_state(JumpVector);
-  #else
-    change_state(Load);
-  #endif
+  change_state(CpuId);
 
   // Run CPU and wait for load to finish
   int load_timeout = 0;
@@ -410,15 +471,16 @@ bool cmd_read_data_bus() {
     snprintf(buf, 3, "%02X", CPU.data_bus);
     SERIAL.print(buf);
   #else
-    SERIAL.write(CPU.data_bus);
+    SERIAL.write((uint8_t)CPU.data_bus);
+    SERIAL.write((uint8_t)(CPU.data_bus >> 8));
   #endif
 
   return true;
 }
 
 // Server command - WriteDataBus
-// Takes argument of 1 byte
-// Writes the specified byte to the data bus.
+// Takes an argument of 2 bytes.
+// Sets the data bus to the provided value. On 8-bit CPUs the upper byte is ignored.
 // This should not be called for CODE fetches after we have called cmd_prefetch_store(), 
 // unless a flow control operation occurs that flushes the queue and returns us to 
 // within original program boundaries.
@@ -431,8 +493,8 @@ bool cmd_write_data_bus() {
     CPU.s_pc = 0;
   }
 
-
-  CPU.data_bus = COMMAND_BUFFER[0];
+  CPU.data_bus = (uint16_t)COMMAND_BUFFER[0];
+  CPU.data_bus |= ((uint16_t)COMMAND_BUFFER[1] << 8);
   CPU.data_type = DATA_PROGRAM;
   return true;
 }
@@ -448,7 +510,10 @@ bool cmd_prefetch_store() {
     return false;
   }
   CPU.prefetching_store = true;
-  CPU.data_bus = STORE_PROGRAM[CPU.s_pc];
+  CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
+  CPU.data_type = DATA_PROGRAM_END;
+  //CPU.data_bus = STORE_PROGRAM[CPU.s_pc];
+
   // s_pc is advanced during cycle() to avoid duplicated increments
   #if DEBUG_STORE
     Serial1.print("## PREFETCH_STORE: s_pc: ");
@@ -459,7 +524,7 @@ bool cmd_prefetch_store() {
     Serial1.println(STORE_PROGRAM[CPU.s_pc], 16);
   #endif
 
-  CPU.data_type = DATA_PROGRAM_END;
+
   return true;
 }
 
@@ -570,7 +635,7 @@ bool cmd_queue_len(void) {
 }
 
 // Server command - QueueBytes
-// Return the contents of the instruction queue, from 0-4 bytes.
+// Return the contents of the instruction queue, from 0-6 bytes.
 bool cmd_queue_bytes(void) {
 
   for(size_t i = 0; i < CPU.queue.len; i++ ) {
@@ -651,14 +716,8 @@ bool cmd_get_cycle_state(void) {
   SERIAL.write(byte0);
   SERIAL.write(CPU.status0);
   SERIAL.write(CPU.command_bits);
-  #if(DATA_BUS_SIZE == 1)
-    //debug_proto("Sending one byte of data bus");
-    SERIAL.write(CPU.data_bus);
-  #else
-    SERIAL.write(uint8_t(CPU.data_bus >> 8));
-    SERIAL.write(uint8_t(CPU.data_bus & 0xFF));
-  #endif
-
+  SERIAL.write(uint8_t(CPU.data_bus & 0xFF));
+  SERIAL.write(uint8_t(CPU.data_bus >> 8));
   return true;
 }
 
@@ -667,23 +726,7 @@ bool cmd_get_cycle_state(void) {
 // Returns 4 bytes
 bool cmd_cycle_get_cycle_state(void) {
   cycle();
-  read_status0();
-  read_8288_command_bits();
-  read_8288_control_bits();
-  uint8_t byte0 = ((uint8_t)CPU.v_state & 0x0F) << 4;
-  byte0 |= (CPU.control_bits & 0x0F);
-
-  SERIAL.write(byte0);
-  SERIAL.write(CPU.status0);
-  SERIAL.write(CPU.command_bits);
-  #if(DATA_BUS_SIZE == 1)
-    debug_proto("writing one byte of data bus");
-    SERIAL.write(CPU.data_bus);
-  #else
-    SERIAL.write(uint8_t(CPU.data_bus >> 8));
-    SERIAL.write(uint8_t(CPU.data_bus & 0xFF));
-  #endif
-
+  cmd_get_cycle_state();
   return true;
 }
 
@@ -753,12 +796,14 @@ void print_registers(registers *regs) {
 }
 
 void print_cpu_state() {
-  
-  static char buf[81];
-  const size_t op_len = (4 + (DATA_BUS_SIZE * 2) + 1);
+  const size_t buf_len = 90;
+  static char buf[buf_len];
+  const size_t op_len = 9; //(4 + 4 + 1)
   static char op_buf[op_len];
   static char q_buf[15];
-  
+  static char data_buf[5];
+  size_t bus_str_width = 0;
+
   const char *ale_str = READ_ALE_PIN ? "A:" : "  ";
   
   char rs_chr = !READ_MRDC_PIN ? 'R' : '.';
@@ -769,10 +814,22 @@ void print_cpu_state() {
   char aiow_chr = !READ_AIOWC_PIN ? 'A' : '.';
   char iow_chr = !READ_IOWC_PIN ? 'W' : '.';
 
+  char intr_chr = '.';
+  char inta_chr = '.';
+  char bhe_chr = !READ_BHE_PIN ? 'B' : '.';
+
   char v_chr = MACHINE_STATE_CHARS[(size_t)CPU.v_state];
   uint8_t q = (CPU.status0 >> 6) & 0x03;
   char q_char = QUEUE_STATUS_CHARS[q];
   char s = CPU.status0 & 0x07;
+
+  // Set the bus string width
+  if (CPU.data_width == BusWidthEight) {
+    bus_str_width = 2;
+  }
+  else {
+    bus_str_width = 4;
+  }
 
   // Get segment from S3 & S4
   const char *seg_str = "  ";
@@ -803,13 +860,33 @@ void print_cpu_state() {
         break;
   }
 
+  // Make data bus string and set r/w indicators based on bus size
+  data_buf[5] = {' '};
+  char *rd_str = "r";
+  char *wr_str = "w";
+  if (CPU.data_width == EightLow) {
+    // Write two hex digits, 0-padded
+    snprintf(data_buf, 5, "%4.2X", (uint8_t)CPU.data_bus);
+  }
+  else if (CPU.data_width == EightHigh) {
+    // Write two hex digits, 0-padded, left-aligned in 4-character field
+    snprintf(data_buf, 5, "%-4.2X", (uint8_t)(CPU.data_bus >> 8));
+  }
+  else {
+    rd_str = "R";
+    wr_str = "W";
+    // Write four hex digits, 0-padded
+    snprintf(data_buf, 5, "%04X", CPU.data_bus);
+  }
+
   // Make string for bus reads and writes
   op_buf[0] = 0;
   if ((!READ_MRDC_PIN || !READ_IORC_PIN) && CPU.bus_state == PASV) {
-    snprintf(op_buf, op_len, "<-r %0*X", DATA_BUS_SIZE * 2, data_bus_peek());
-  }
-  if(!READ_MWTC_PIN || !READ_IOWC_PIN) {
-    snprintf(op_buf, op_len, "w-> %0*X", DATA_BUS_SIZE * 2, CPU.data_bus);
+      snprintf(op_buf, op_len, "%s-> %s", rd_str, data_buf);
+  } else if (!READ_MWTC_PIN || !READ_IOWC_PIN) {
+      snprintf(op_buf, op_len, "<-%s %s", wr_str, data_buf);
+  } else {
+      snprintf(op_buf, op_len, "%*s", (int)(4 + bus_str_width), "");
   }
 
   const char *q_str = queue_to_string();
@@ -821,27 +898,30 @@ void print_cpu_state() {
   }
   else {
     t_str = CYCLE_STRINGS[(size_t)CPU.bus_cycle];
+
   }
 
   snprintf(
-    buf, 81, 
-    "%08ld %c %s[%05lX] %2s M:%c%c%c I:%c%c%c %-4s %s %2s %-*s | %c%d [%-*s]", 
+    buf, 
+    buf_len, 
+    "%08ld %c %s[%05lX][%05lX] %2s M:%c%c%c I:%c%c%c P:%c%c%c %-4s %s %2s %8s | %c%d [%-*s]", 
     CYCLE_NUM, 
     v_chr, 
     ale_str,
     //read_address(), 
     CPU.address_latch,
+    peek_address(),
     seg_str,
     rs_chr, aws_chr, ws_chr,
     ior_chr, aiow_chr, iow_chr,
+    intr_chr, inta_chr, bhe_chr,
     BUS_STATE_STRINGS[(size_t)CPU.bus_state],
     t_str, 
     st_str,
-    4 + (DATA_BUS_SIZE * 2),
     op_buf,
     q_char,
     CPU.queue.len,
-    QUEUE_MAX * 2,
+    CPU.queue.size * 2,
     q_str
   );
 
@@ -866,12 +946,21 @@ void print_cpu_state() {
   Serial1.println("");
 }
 
-void change_state(machine_state new_state) {
+void change_state(machine_state_t new_state) {
   switch(new_state) {
     case Reset:
       CPU.doing_reset = true;    
+      CPU.cpuid_counter = 0;
+      CPU.cpuid_queue_reads = 0;
       CPU.v_pc = 0;
       CPU.s_pc = 0;
+      break;
+    case CpuId: 
+      CPU.doing_reset = false;
+      CPU.doing_id = true;
+      CPU.cpuid_counter = 0;
+      CPU.cpuid_queue_reads = 0;
+      CPU.v_pc = 0;
       break;
     case JumpVector:
       CPU.doing_reset = false;
@@ -921,6 +1010,70 @@ void change_state(machine_state new_state) {
   CPU.v_state = new_state;
 }
 
+// Emulate a code fetch from the specified program.
+uint16_t read_program(const uint8_t *program, uint16_t *pc, uint32_t address, data_width_t width) {
+
+  uint16_t data = 0;
+
+  if (width == EightLow) {
+    data = program[(*pc)++];
+  }
+  else if (width == EightHigh) {
+    // TODO: bounds checks
+    data = program[(*pc) + 1];
+  }
+  else {
+    // 16-bit read. 
+
+    if ((address & 1) == 0) {
+      // Even address
+      //Serial1.println("## Even read ##");
+      data = program[(*pc)++];
+      data |= ((uint16_t)program[(*pc)++]) << 8;
+    }
+    else {
+      // Odd address. 
+      //Serial1.println("## Odd read ##");
+      if ((*pc) > 0) {
+        // This byte doesn't really matter, but we can simulate fetching more realistically by including it.
+        // If this happens to be the start of the program though, it will just have to be 0.
+        data = program[(*pc) - 1];
+      }
+      data |= ((uint16_t)program[(*pc)++]) << 8;
+    }
+  }
+
+  return data;
+}
+
+// Simulate fetching NOPs based on bus width.
+uint16_t read_nops(data_width_t width) {
+  if (width == EightLow) {
+    return 0x90;
+  }
+  else {
+    return 0x9090;
+  }
+}
+
+void set_data_bus_width() {
+  if (!READ_BHE_PIN) {
+    if ((CPU.address_latch & 1) == 0) {
+      // BHE is active, and address is even. Bus width is 16.
+      CPU.data_width = Sixteen;
+    }
+    else {
+      // BHE is active, and address is odd. Bus width is EightHigh.
+      CPU.data_width = EightHigh;
+    }
+  }
+  else {
+    // If BHE is inactive, then we can't read an even address. So this must be 
+    // EightLow.
+    CPU.data_width = EightLow;
+  }
+}
+
 void cycle() {
 
   // First, tick the CPU and increment cycle count
@@ -930,6 +1083,8 @@ void cycle() {
     // overflow
     CYCLE_NUM_H++;
   }
+
+  CPU.cpuid_counter++;
 
   // Read the CPU status pins
   read_status0();
@@ -956,6 +1111,8 @@ void cycle() {
   // Operate current T-state
   switch(CPU.bus_cycle) {
     case T1:
+      // Set the data bus width
+      set_data_bus_width();
       break;
 
     case T2:
@@ -972,8 +1129,8 @@ void cycle() {
 
         if(q == QUEUE_FLUSHED) {
           Serial1.println("## Queue flush during T4. Supressing queue push.");
-          if(CPU.queue.len < QUEUE_MAX) {
-            push_queue(CPU.data_bus, CPU.data_type);
+          if(CPU.queue.len < CPU.queue.size) {
+            push_queue(CPU.data_bus, CPU.data_type, CPU.data_width);
           }
           else {
             // Shouldn't be here
@@ -981,8 +1138,8 @@ void cycle() {
           }
         }
         else {
-          if(CPU.queue.len < QUEUE_MAX) {
-            push_queue(CPU.data_bus, CPU.data_type);
+          if(CPU.queue.len < CPU.queue.size) {
+            push_queue(CPU.data_bus, CPU.data_type, CPU.data_width);
           }
           else {
             // Shouldn't be here
@@ -993,7 +1150,6 @@ void cycle() {
       CPU.bus_state_latched = PASV;
       break;
   }
-
 
   // Handle queue activity
   if((q == QUEUE_FIRST) || (q == QUEUE_SUBSEQUENT)) {
@@ -1093,28 +1249,72 @@ void cycle() {
 
   switch(CPU.v_state) {
 
-    case JumpVector:
-      // We are executing the initial jump from the reset vector FFFF:0000.
-      // This is to avoid wrapping effective address during load procedure.
-      // Optional - disable in header
 
+    case CpuId:
+      // We are executing the CPU ID routine.
       if(!READ_MRDC_PIN) {
         // CPU is reading (MRDC active-low)      
         if(CPU.bus_state == CODE) {    
           // We are reading a code byte
           if(CPU.v_pc < sizeof JUMP_VECTOR) {
-            // Feed jump instruction to CPU
-            CPU.data_bus = JUMP_VECTOR[CPU.v_pc];
+            // Feed CPU ID instruction to CPU.
+            CPU.data_bus = read_program(CPUID_PROGRAM, &CPU.v_pc, CPU.address_latch, CPU.data_width);
             CPU.data_type = DATA_PROGRAM;
-            CPU.v_pc++;
+            data_bus_write(CPU.data_bus, CPU.data_width);
+            // Immediately change to next state.
+            #if USE_LOAD_SEG  
+              change_state(JumpVector);
+            #else
+              change_state(Load);
+            #endif
+          }
+        }
+      }
+      break;
+
+    case JumpVector:
+      // We are executing the initial jump from the reset vector FFFF:0000.
+      // This is to avoid wrapping effective address during load procedure.
+      // Optional - disable in header
+
+      // If previous state was CpuId, then reset the utility timer on the first queue read.
+      if (CPU.doing_id && (q == QUEUE_FIRST)) {
+        if (CPU.cpuid_queue_reads == 0) {
+          #if TRACE_ID
+            Serial1.println("## Starting CPUID counter! ##");
+          #endif
+          CPU.cpuid_counter = 0;
+        }
+        else {
+            #if TRACE_ID
+              Serial1.print("## CPUID counter stopped at: ");
+              Serial1.print(CPU.cpuid_counter);          
+              Serial1.println(" ##");
+            #endif
+            CPU.doing_id = false;
+            detect_cpu_type(CPU.cpuid_counter);
+        }
+        CPU.cpuid_queue_reads++;
+      }
+
+      if(!READ_MRDC_PIN) {
+        // CPU is reading (MRDC active-low)      
+        if(CPU.bus_state == CODE) {    
+          // We are reading a code byte.
+          if(CPU.v_pc < sizeof JUMP_VECTOR) {
+            // Feed jump instruction to CPU
+
+            //CPU.data_bus = JUMP_VECTOR[CPU.v_pc];
+            CPU.data_bus = read_program(JUMP_VECTOR, &CPU.v_pc, CPU.address_latch, CPU.data_width);
+            CPU.data_type = DATA_PROGRAM;
           }
           else {
             // Ran out of program, so return NOP. Doesn't matter what we feed
             // as queue will be reset.
-            CPU.data_bus = OPCODE_NOP;
+            CPU.data_bus = read_nops(CPU.data_width);
             CPU.data_type = DATA_PROGRAM_END;
           }
-          data_bus_write(CPU.data_bus);
+          data_bus_write(CPU.data_bus, CPU.data_width);
         }
       }        
 
@@ -1122,6 +1322,7 @@ void cycle() {
         // Jump is finished on first address latch of LOAD_SEG:0
         uint32_t dest = calc_flat_address(LOAD_SEG, 0);
         if(dest == CPU.address_latch) {
+          // Transition to Load state.
           change_state(Load);
           break;
         }
@@ -1137,14 +1338,7 @@ void cycle() {
           // We are reading a code byte
           if(CPU.v_pc < sizeof LOAD_PROGRAM) {
             // Feed load program to CPU
-
-            #if (DATA_BUS_SIZE == 1)
-              CPU.data_bus = LOAD_PROGRAM[CPU.v_pc++];
-            #else
-              CPU.data_bus = LOAD_PROGRAM[CPU.v_pc++] << 8;
-              CPU.data_bus = LOAD_PROGRAM[CPU.v_pc++];
-            #endif
-
+            CPU.data_bus = read_program(LOAD_PROGRAM, &CPU.v_pc, CPU.address_latch, CPU.data_width);
             CPU.data_type = DATA_PROGRAM;
           }
           else {
@@ -1159,7 +1353,7 @@ void cycle() {
             CPU.data_type = DATA_PROGRAM_END;
             //change_state(LoadDone);
           }
-          data_bus_write(CPU.data_bus);
+          data_bus_write(CPU.data_bus, CPU.data_width);
         }
         
         if(CPU.bus_state == MEMR) {
@@ -1169,7 +1363,7 @@ void cycle() {
             // First two bytes of LOAD_PROGRAM were patched with flags
             CPU.data_bus = LOAD_PROGRAM[CPU.address_latch];
             CPU.data_type = DATA_PROGRAM;
-            data_bus_write(CPU.data_bus);
+            data_bus_write(CPU.data_bus, CPU.data_width);
             
           }
           else {
@@ -1206,10 +1400,10 @@ void cycle() {
       if ((!READ_MRDC_PIN || !READ_IORC_PIN) && CPU.bus_state == PASV) {
         // CPU is reading from data bus. We assume that the client has called CmdWriteDataBus to set 
         // the value of CPU.data_bus. Write it.
-        data_bus_write(CPU.data_bus);
+        data_bus_write(CPU.data_bus, CPU.data_width);
 
         if ((CPU.bus_state_latched == CODE) && (CPU.prefetching_store)) {
-          CPU.s_pc++;
+          //CPU.s_pc++;
           #if DEBUG_STORE
             Serial1.print("STORE: Wrote STORE PGM BYTE to bus: ");
             Serial1.print(CPU.data_bus, 16);
@@ -1221,7 +1415,7 @@ void cycle() {
     
       if(!READ_MWTC_PIN || !READ_IOWC_PIN) {
         // CPU is writing to the data bus, latch value
-        CPU.data_bus = data_bus_read();
+        CPU.data_bus = data_bus_read(CPU.data_width);
       }
       
       break;
@@ -1237,9 +1431,11 @@ void cycle() {
         if ((CPU.bus_state_latched == CODE) && (CPU.prefetching_store)) {
           // Since client does not cycle the CPU in this state, we have to fetch from 
           // STORE program ourselves
-          CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
+
+          CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
+          //CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
           CPU.data_type = DATA_PROGRAM_END;
-          data_bus_write(CPU.data_bus);
+          data_bus_write(CPU.data_bus, CPU.data_width);
           #if DEBUG_STORE
             Serial1.print("STORE: Wrote STORE PGM BYTE to bus (in FINALIZE): ");
             Serial1.print(CPU.data_bus, 16);
@@ -1248,7 +1444,7 @@ void cycle() {
           #endif
         }
         else {
-          data_bus_write(CPU.data_bus);
+          data_bus_write(CPU.data_bus, CPU.data_width);
         }
       }
 
@@ -1264,14 +1460,16 @@ void cycle() {
       // The client should not cycle the CPU in this state.
       if (!READ_MRDC_PIN && CPU.bus_state == PASV) {
         // CPU is reading (MRDC active-low)
-        data_bus_write(CPU.data_bus);
+        data_bus_write(CPU.data_bus, CPU.data_width);
 
         if ((CPU.bus_state_latched == CODE) && (CPU.prefetching_store)) {
           // Since client does not cycle the CPU in this state, we have to fetch from 
           // STORE program ourselves          
-          CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
+
+          CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
+          //CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
           CPU.data_type = DATA_PROGRAM_END;
-          data_bus_write(CPU.data_bus);
+          data_bus_write(CPU.data_bus, CPU.data_width);
           #if DEBUG_STORE
             Serial1.print("STORE: Wrote STORE PGM BYTE to bus (in EXECUTE_DONE): ");
             Serial1.print(CPU.data_bus, 16);
@@ -1281,7 +1479,7 @@ void cycle() {
         }
         else {
           Serial1.println("## Invalid condition: ExecuteDone without loading STORE");
-          data_bus_write(CPU.data_bus);
+          data_bus_write(CPU.data_bus, CPU.data_width);
         }
       }      
       break;
@@ -1298,7 +1496,8 @@ void cycle() {
           // CPU is doing code fetch
           if(CPU.s_pc < sizeof STORE_PROGRAM) {
             // Read code byte from store program
-            CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
+            //CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
+            CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
             #if DEBUG_STORE
               Serial1.print("STORE: fetching byte: ");
               Serial1.print(CPU.data_bus, 16);
@@ -1313,13 +1512,13 @@ void cycle() {
             CPU.data_type = DATA_PROGRAM_END;
           }
         }
-        data_bus_write(CPU.data_bus);
+        data_bus_write(CPU.data_bus, CPU.data_width);
       }
 
       // CPU is writing to memory address - this should only happen during readback when
       // the flags register is pushed to the stack (The only way to read the full flags)      
       if(!READ_MWTC_PIN) {
-        CPU.data_bus = data_bus_read();
+        CPU.data_bus = data_bus_read(CPU.data_width);
 
         // Store program sets up SS:SP as 0:4, so write should be to the first four memory
         // addresses, for pushing IP and FLAGS.
@@ -1328,8 +1527,17 @@ void cycle() {
           #if DEBUG_STORE
             Serial1.println("## Store Stack Push");
           #endif
-          *CPU.readback_p = CPU.data_bus;
-          CPU.readback_p++;
+          if (CPU.data_width == EightLow) {
+            *CPU.readback_p = (uint8_t)CPU.data_bus;
+            CPU.readback_p++;
+          }
+          else if (CPU.data_width == EightHigh) {
+            Serial1.println("## Bad Data Bus Width during Store: EightHigh");
+          }
+          else {
+            *(uint16_t *)CPU.readback_p = CPU.data_bus;
+            CPU.readback_p += 2;
+          }
         }
         else {
           // We shouldn't be writing to any other addresses, something wrong happened
@@ -1350,7 +1558,7 @@ void cycle() {
 
       // CPU is writing to IO address - this indicates we are saving a register value. 
       // We structured the register struct in the right order, so we can overwrite it
-      // with raw uint8_ts.
+      // directly.
       if(!READ_IOWC_PIN) {
 
         if(CPU.address_latch == 0xFD) {
@@ -1362,15 +1570,24 @@ void cycle() {
             Serial1.println(CPU.post_regs.ip, HEX);
           #endif            
           //CPU.post_regs.ip -= 0x24;
-          CPU.post_regs.ip -= (0x24 + 4); // added 4 NOPs to start of STORE program
+          CPU.post_regs.ip -= (0x24 + 6); // added 6 NOPs to start of STORE program
           
           change_state(StoreDone);
         }
         else {
-          CPU.data_bus = data_bus_read();
+          CPU.data_bus = data_bus_read(CPU.data_width);
 
-          *CPU.readback_p = CPU.data_bus;
-          CPU.readback_p++;
+          if (CPU.data_width == EightLow) {
+            *CPU.readback_p = (uint8_t)CPU.data_bus;
+            CPU.readback_p++;
+          }
+          else if (CPU.data_width == EightHigh) {
+            Serial1.println("## Bad Data Bus Width during Store: EightHigh");
+          }
+          else {
+            *(uint16_t *)CPU.readback_p = CPU.data_bus;
+            CPU.readback_p += 2;
+          }
 
           #if DEBUG_STORE
             Serial1.print("## Store IO write: ");
@@ -1400,6 +1617,12 @@ void cycle() {
     break;
   }
 
+  #if DEBUG_LOCK
+    if (!READ_LOCK_PIN) {
+      Serial1.println(">>> LOCK!");
+    }
+  #endif
+
   // Print instruction state if tracing is enabled
   switch(CPU.v_state) {
     case Reset:
@@ -1407,6 +1630,11 @@ void cycle() {
         print_cpu_state();
       #endif
       break;
+    case CpuId:
+      #if TRACE_ID
+        print_cpu_state();
+      #endif
+      break;      
     case JumpVector:
       #if TRACE_VECTOR
         print_cpu_state();
@@ -1467,6 +1695,30 @@ void print_addr(unsigned long addr) {
   static char addr_buf[6];
   snprintf(addr_buf, 6, "%05lX", addr);
   Serial1.println(addr_buf);
+}
+
+void detect_cpu_type(uint32_t cpuid_cycles) {
+
+  if (CPU.width == BusWidthEight) {
+    if (cpuid_cycles > 5) { 
+      Serial1.println("Detected NEC V20");
+      CPU.cpu_type = necV20;
+    }
+    else {
+      Serial1.println("Detected i8088");
+      CPU.cpu_type = i8088;
+    } 
+  }
+  else {
+    if (cpuid_cycles > 5) { 
+      Serial1.println("Detected NEC V20");
+      CPU.cpu_type = necV30;
+    }
+    else {
+      Serial1.println("Detected i8086");
+      CPU.cpu_type = i8086;
+    }
+  }
 }
 
 // Main sketch loop 

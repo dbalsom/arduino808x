@@ -1,5 +1,5 @@
 /*
-    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    Arduino8088 Copyright 2022-2025 Daniel Balsom
     https://github.com/dbalsom/arduino_8088
 
     Permission is hereby granted, free of charge, to any person obtaining a
@@ -23,8 +23,7 @@
 #ifndef _ARDUINO8088_H
 #define _ARDUINO8088_H
 
-// Set this to 0 if 8088, 1 if 8086
-#define CPU_TYPE 0
+#include "gpio_pins.h"
 
 // Set this to 1 to use i8288 emulation
 #define EMULATE_8288 1
@@ -59,18 +58,45 @@
 // Code segment to use for load program. User programs shouldn't jump here.
 const uint16_t LOAD_SEG = 0xD000;
 
-#if (CPU_TYPE==0)
-  // Maximum size of the processor instruction queue. For 8088 == 4, 8086 == 6. 
-  #define QUEUE_MAX 4
-  #define DATA_BUS_TYPE uint8_t
-  #define DATA_BUS_SIZE 1
-#else
-  #define QUEUE_MAX 6
-  #define DATA_BUS_TYPE uint16_t
-  #define DATA_BUS_SIZE 2
-#endif
+// Maximum size of the processor instruction queue. For 8088 == 4, 8086 == 6. 
+#define QUEUE_SIZE 6
 
+// CPU width. Eight if an 8088/V20 is detected on reset, Sixteen if an 8086/V30 is detected. 
+typedef enum {
+  BusWidthEight,
+  BusWidthSixteen,
+} cpu_width_t;
 
+// Data bus width. There are three possible data bus states:
+// - the low 8 bits are active,
+// - the high 8 bits are active,
+// - all 16 bits are active
+typedef enum {
+  EightLow,
+  EightHigh,
+  Sixteen,
+} data_width_t;
+
+// CPU type. Arduino8088 attempts to detect these. These are aliased to the byte values 0-5.
+typedef enum {
+  i8088, 
+  i8086,
+  necV20,
+  necV30,
+  i80188,
+  i80186,
+} cpu_type_t;
+
+const char *CPU_TYPE_STRINGS[] = {
+  "i8088",
+  "i8086",
+  "NEC V20",
+  "NEC V30",
+  "i80188",
+  "i80186"
+};
+
+const char CPU_TYPE_COUNT = sizeof(CPU_TYPE_STRINGS) / sizeof(CPU_TYPE_STRINGS[0]);
 
 // States for main program state machine:
 // ----------------------------------------------------------------------------
@@ -82,6 +108,7 @@ const uint16_t LOAD_SEG = 0xD000;
 // Store - CPU has is executing register Store program
 typedef enum {
   Reset = 0,
+  CpuId,
   JumpVector,
   Load,
   LoadDone,
@@ -91,14 +118,15 @@ typedef enum {
   Store,
   StoreDone,
   Done
-} machine_state;
+} machine_state_t;
 
 const char MACHINE_STATE_CHARS[] = {
-  'R', 'J', 'L', 'M', 'E', 'F', 'X', 'S', 'T', 'D'
+  'R', 'I', 'J', 'L', 'M', 'E', 'F', 'X', 'S', 'T', 'D'
 };
 
 const char* MACHINE_STATE_STRINGS[] = {
   "Reset",
+  "CpuId",
   "JumpVector",
   "Load",
   "LoadDone",
@@ -174,8 +202,9 @@ typedef struct registers {
 
 // Processor instruction queue
 typedef struct queue {
-  uint8_t queue[QUEUE_MAX];
-  uint8_t types[QUEUE_MAX];
+  uint8_t queue[QUEUE_SIZE];
+  uint8_t types[QUEUE_SIZE];
+  size_t size;
   uint8_t front;
   uint8_t back;
   uint8_t len;
@@ -214,14 +243,20 @@ typedef struct program_stats {
 // Main CPU State
 typedef struct cpu {
   bool doing_reset;
-  machine_state v_state;
+  bool doing_id;
+  cpu_type_t cpu_type; // Detected type of the CPU.
+  cpu_width_t width; // Native bus width of the CPU. Detected on reset from BHE line.
+  uint32_t cpuid_counter; // Cpuid cycle counter. Used to time to identify the CPU type.
+  uint32_t cpuid_queue_reads; // Number of queue reads since reset of Cpuid cycle counter.
+  machine_state_t v_state;
   uint32_t state_begin_time;
   uint32_t address_bus;
   uint32_t address_latch;
   s_state bus_state_latched; // Bus state latched on T1 and valid for entire bus cycle (immediate bus state goes PASV on T3)
   s_state bus_state; // Bus state is current status of S0-S2 at given cycle (may not be valid)
   t_cycle bus_cycle;
-  DATA_BUS_TYPE data_bus;
+  data_width_t data_width; // Current size of data bus. Detected during bus transfer from BHE line.
+  uint16_t data_bus;
   bool prefetching_store;
   uint8_t reads_during_prefetching_store;
   uint8_t data_type;
@@ -346,12 +381,15 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 #endif
 
 // -------------------------- CPU Input pins ----------------------------------
+#define BHE_PIN 17
+#define READ_BHE_PIN READ_PIN_D17
 
 #define READY_PIN 6
 #define TEST_PIN 7
 #define LOCK_PIN 10
 #define INTR_PIN 12
 #define NMI_PIN 13
+
 
 // -------------------------- CPU Output pins ---------------------------------
 #define RQ_PIN 3
@@ -447,7 +485,6 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 
 // Write macros
 #if defined(__SAM3X8E__) // If Arduino DUE
-
   // D4: PC26* (some references say PA29 - didn't work)
   #define WRITE_CLK(x) ((x) ? (PIOC->PIO_SODR = BIT26) : (PIOC->PIO_CODR = BIT26))
   // D5: PC25
@@ -505,6 +542,15 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 
 // Read macros
 
+#if defined(__SAM3X8E__) // If Arduino DUE
+  #define READ_LOCK_PIN      ((PIOC->PIO_PDSR & BIT29) != 0)
+#elif defined(__AVR_ATmega2560__) // If Arduino MEGA
+  #define READ_LOCK_PIN 0
+#elif defined(ARDUINO_GIGA)
+  #define READ_LOCK_PIN 0
+#endif
+
+
 #if EMULATE_8288
   // D50: PC13
   #define READ_ALE_PIN       (I8288.ale)
@@ -550,6 +596,9 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
     #define READ_INTA_PIN      ((PIOC->PIO_PDSR & BIT18) != 0)
 
   #elif defined(__AVR_ATmega2560__) // If Arduino MEGA
+
+    // TODO: implement me
+    #define READ_LOCK_PIN 0
 
     #define READ_AEN_PIN ((PINF & 0x01) != 0)
     #define READ_CEN_PIN ((PINF & 0x02) != 0)
@@ -618,17 +667,19 @@ static const uint8_t BIT_REVERSE_TABLE[256] =
 uint32_t calc_flat_address(uint16_t seg, uint16_t offset);
 
 void clock_tick();
-void data_bus_write(DATA_BUS_TYPE byte);
-DATA_BUS_TYPE data_bus_read();
+void data_bus_write(uint16_t data, cpu_width_t width);
+uint16_t data_bus_read();
 
 void latch_address();
-void read_address();
+void read_address(bool peek);
+uint32_t peek_address();
 void read_status0();
 bool cpu_reset();
+void cpu_set_width(cpu_width_t width);
 
 void init_queue();
-void push_queue(uint8_t byte, uint8_t dtype);
-uint8_t pop_queue(uint8_t *byte, uint8_t *dtype);
+void push_queue(uint16_t data, uint8_t dtype, bool a0);
+bool pop_queue(uint8_t *byte, uint8_t *dtype);
 void empty_queue();
 void print_queue();
 void read_queue();

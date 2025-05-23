@@ -1,5 +1,5 @@
 /*
-    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    Arduino8088 Copyright 2022-2025 Daniel Balsom
     https://github.com/dbalsom/arduino_8088
 
     Permission is hereby granted, free of charge, to any person obtaining a

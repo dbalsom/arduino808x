@@ -1,5 +1,5 @@
 /*
-    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    Arduino8088 Copyright 2022-2025 Daniel Balsom
     https://github.com/dbalsom/arduino_8088
 
     Permission is hereby granted, free of charge, to any person obtaining a
@@ -41,20 +41,21 @@
 #define LOAD_INDICATOR 1
 #define STORE_INDICATOR 1
 
-#define TRACE_ALL 0
-
 // These defines control tracing and debugging output for each state.
 // Note: tracing a STORE operation will likely cause it to timeout on the client.
 #define TRACE_RESET 0
 #define DEBUG_RESET 0
 #define TRACE_VECTOR 0
 #define TRACE_LOAD 0
+#define TRACE_ID 0
 #define TRACE_EXECUTE 0
 #define TRACE_STORE 0
 #define DEBUG_STORE 0
 #define TRACE_FINALIZE 0
 #define DEBUG_FINALIZE 0
 #define DEBUG_INSTR 0 // Print instruction mnemonics as they are executed from queue
+
+#define DEBUG_LOCK 0 // Print a message when the LOCK pin is asserted on a cycle
 
 // Debugging output for queue operations (flushes, regular queue ops are always reported)
 #define TRACE_QUEUE 0
@@ -76,7 +77,7 @@ const char VERSION_DAT[] = {
   'a', 'r', 'd', '8', '0', '8', '8'
 };
 
-const uint8_t VERSION_NUM = 1;
+const uint8_t VERSION_NUM = 2;
 
 typedef enum {
   CmdNone            = 0x00,
@@ -103,7 +104,8 @@ typedef enum {
   CmdCycleGetCycleState = 0x15,
   CmdPrefetchStore   = 0x16,
   CmdReadAddress     = 0x17,
-  CmdInvalid         = 0x18,
+  CmdCpuType         = 0x18,
+  CmdInvalid         = 0x19,
 } server_command;
 
 const char *CMD_STRINGS[] = {
@@ -131,6 +133,7 @@ const char *CMD_STRINGS[] = {
   "CGETCYCLESTATE",
   "PREFETCHSTORE",
   "READADDRBUS",
+  "CPUTYPE",
   "INVALID",
 };
 
@@ -164,6 +167,7 @@ const uint8_t CMD_ALIASES[] = {
   'f', // CmdGetCycleStatus
   'k', // CmdPrefetchStore
   'i', // CmdReadAddress
+  'k', // CmdCpuType
   0 // CmdInvalid
 };
 
@@ -188,7 +192,7 @@ const uint8_t CMD_INPUTS[] = {
   0,  // CmdRead8288Command 
   0,  // CmdRead8288Control 
   0,  // CmdReadDataBus 
-  1,  // CmdWriteDataBus
+  2,  // CmdWriteDataBus
   0,  // CmdFinalize
   0,  // CmdBeginStore,
   0,  // CmdStore,
@@ -202,6 +206,7 @@ const uint8_t CMD_INPUTS[] = {
   0,  // CmdCycleGetCycleState,
   0,  // CmdPrefetchStore,
   0,  // CmdReadAddress
+  0,  // CmdCpuType
   0,  // CmdInvalid
 };
 
@@ -242,6 +247,7 @@ bool cmd_get_cycle_state(void);
 bool cmd_cycle_get_cycle_state(void);
 bool cmd_prefetch_store(void);
 bool cmd_read_address(void);
+bool cmd_cpu_type(void);
 bool cmd_invalid(void);
 
 #endif

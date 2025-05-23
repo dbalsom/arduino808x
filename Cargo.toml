@@ -1,21 +1,22 @@
 [workspace]
 members = [
-    "client/rust"
+    "crates/ard808x_client",
+    "crates/ard808x_cpu",
+    "crates/exec_program",
 ]
+resolver = "2"
+default-members = ["crates/exec_program"]
 
-[package]
-name = "arduino_8088"
-version = "0.2.0"
+[workspace.package]
+version = "0.3.0"
 edition = "2021"
+authors = ["Daniel Balsom", "Andreas Jonsson"]
 license = "MIT"
+repository = "https://github.com/dbalsom/arduino_808x"
 
-[[bin]]
-name = "cpu_client"
-path = "client/rust/src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }
-env_logger = "0.9"
+env_logger = "0.11"
 log = "0.4"
 #serialport = { git = "https://github.com/LukaOber/serialport-rs", branch = "pr/34" }
 serialport = { git = "https://github.com/dbalsom/serialport-rs", branch = "arduino-fix" }

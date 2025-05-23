@@ -1,0 +1,53 @@
+     1                                  ; store.asm
+     2                                  ; Original routine by Andreas Jonsson
+     3                                  ; https://github.com/andreas-jonsson/virtualxt/tree/develop/tools/validator/pi8088
+     4                                  ;
+     5                                  ; Assemble with nasm: 
+     6                                  ; nasm store.asm -o store.bin
+     7                                  
+     8                                  ; Registers are output in turn to dummy IO addresses, intercepted by the validator 
+     9                                  ; program. End of the routine is indicated by a write to IO address 0xFD.
+    10                                  
+    11                                  ; Since there is no direct 'MOV rm, flags' or 'MOV rm, ip' instruction, we push 
+    12                                  ; these  two registers to the stack and intercept memory writes to the dummy stack
+    13                                  ; space defined at 00000-00003.
+    14                                  
+    15                                  cpu	8086
+    16                                  org	0h
+    17                                  
+    18 00000000 E7FE                    out 0xFE, ax    ; AX
+    19 00000002 89D8                    mov ax, bx    
+    20 00000004 E7FE                    out 0xFE, ax    ; BX
+    21 00000006 89C8                    mov ax, cx    
+    22 00000008 E7FE                    out 0xFE, ax    ; CX
+    23 0000000A 89D0                    mov ax, dx    
+    24 0000000C E7FE                    out 0xFE, ax    ; DX
+    25                                                
+    26 0000000E 8CD0                    mov ax, ss    
+    27 00000010 E7FE                    out 0xFE, ax    ; SS
+    28 00000012 89E0                    mov ax, sp    
+    29 00000014 E7FE                    out 0xFE, ax    ; SP
+    30                                                
+    31 00000016 B80000                  mov ax, 0     
+    32 00000019 8ED0                    mov ss, ax    
+    33 0000001B B80400                  mov ax, 4     
+    34 0000001E 89C4                    mov sp, ax      ; Set up 4 bytes of stack for flags and IP.
+    35 00000020 9C                      pushf           ; Flags 
+    36 00000021 E80000                  call _ip        ; We capture IP when it is pushed to the stack on CALL. 
+    37                                  _ip:            ; We then adjust it by 36 (0x24) bytes to the start of the store procedure.
+    38                                                  
+    39 00000024 8CC8                    mov ax, cs    
+    40 00000026 E7FE                    out 0xFE, ax    ; CS 
+    41 00000028 8CD8                    mov ax, ds    
+    42 0000002A E7FE                    out 0xFE, ax    ; DS
+    43 0000002C 8CC0                    mov ax, es    
+    44 0000002E E7FE                    out 0xFE, ax    ; ES
+    45 00000030 89E8                    mov ax, bp    
+    46 00000032 E7FE                    out 0xFE, ax    ; BP
+    47 00000034 89F0                    mov ax, si    
+    48 00000036 E7FE                    out 0xFE, ax    ; SI
+    49 00000038 89F8                    mov ax, di    
+    50 0000003A E7FE                    out 0xFE, ax    ; DI
+    51                                               
+    52 0000003C B0FF                    mov al, 0xFF
+    53 0000003E E6FD                    out 0xFD, al    ; Done! 

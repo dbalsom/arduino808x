@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/client/rust/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ard808x_client/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ard808x_cpu/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ard808x_cpu/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/exec_program/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ard808x_cpu/tests" isTestSource="true" />
+      <excludeFolder url="file://$MODULE_DIR$/client/rust/target" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

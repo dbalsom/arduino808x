@@ -1,5 +1,5 @@
 /*
-    Arduino8088 Copyright 2022-2024 Daniel Balsom
+    Arduino8088 Copyright 2022-2025 Daniel Balsom
     https://github.com/dbalsom/arduino_8088
 
     Permission is hereby granted, free of charge, to any person obtaining a
@@ -95,13 +95,16 @@
 
 #elif defined(__SAM3X8E__) 
     // If Arduino DUE
+    #define READ_PIN_D08      ((PIOC->PIO_PDSR & BIT22) != 0)
+    #define READ_PIN_D09      ((PIOC->PIO_PDSR & BIT21) != 0)
+    #define READ_PIN_D10      ((PIOC->PIO_PDSR & BIT29) != 0)
 
     #define READ_PIN_D14      ((PIOD->PIO_PDSR & BIT04) != 0)
     #define READ_PIN_D15      ((PIOD->PIO_PDSR & BIT05) != 0)
     #define READ_PIN_D16      ((PIOA->PIO_PDSR & BIT13) != 0)
-
-    #define READ_PIN_D09       ((PIOC->PIO_PDSR & BIT21) != 0)
-    #define READ_PIN_D08       ((PIOC->PIO_PDSR & BIT22) != 0)
+    #define READ_PIN_D17      ((PIOA->PIO_PDSR & BIT12) != 0)
+    #define READ_PIN_D18      ((PIOA->PIO_PDSR & BIT11) != 0)
+    #define READ_PIN_D19      ((PIOA->PIO_PDSR & BIT10) != 0)
 
     #define READ_PIN_D38      ((PIOC->PIO_PDSR & BIT06) != 0)
     #define READ_PIN_D39      ((PIOC->PIO_PDSR & BIT07) != 0)
@@ -125,6 +128,7 @@
     #define READ_PIN_D14  ((PINJ & BIT1) != 0) // S0  - Pin 14
     #define READ_PIN_D15  ((PINJ & BIT0) != 0) // S1  - Pin 15
     #define READ_PIN_D16  ((PINH & BIT1) != 0) // S2  - Pin 16 (H1)
+    #define READ_PIN_D17  ((PINH & BIT0) != 0) // BHE - Pin 17 (H0)
     #define READ_PIN_D38  ((PIND & BIT7) != 0) // S3  - Pin 38 (D7)
     #define READ_PIN_D39  ((PING & BIT2) != 0) // S4  - Pin 39 (G2)
     #define READ_PIN_D40  ((PING & BIT1) != 0) // S5  - Pin 40 (G1)
@@ -140,3 +144,5 @@
     #define READ_PIN_D47  ((PINL & 0x04) != 0)
     #define READ_PIN_D45  ((PINL & 0x10) != 0)
 #endif
+
+#endif // _ARDUINO8088_PINS_H

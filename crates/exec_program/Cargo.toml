@@ -1,0 +1,18 @@
+[package]
+name = "exec_program"
+description = "A utility to execute arbitrary code on an Intel 8088, 8086, NEC V20, or V30 CPU via an Arduino DUE."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "exec_program"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+ard808x_cpu = { path = "../ard808x_cpu" }
+env_logger.workspace = true
+log.workspace = true
