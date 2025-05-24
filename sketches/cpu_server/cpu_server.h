@@ -37,30 +37,41 @@
 
 #define MODE_ASCII 0 // Use ASCII response codes (for interactive debugging only, client won't support)
 
+#define BRKEM_VECTOR ((uint8_t)0x00)
+
 // Print a dot to the debugging output on each load.
 #define LOAD_INDICATOR 1
 #define STORE_INDICATOR 1
 
+#define TRACE_ALL 0
+
 // These defines control tracing and debugging output for each state.
 // Note: tracing a STORE operation will likely cause it to timeout on the client.
-#define TRACE_RESET 0
-#define DEBUG_RESET 0
-#define TRACE_VECTOR 0
-#define TRACE_LOAD 0
-#define TRACE_ID 0
-#define TRACE_EXECUTE 0
-#define TRACE_STORE 0
-#define DEBUG_STORE 0
-#define TRACE_FINALIZE 0
-#define DEBUG_FINALIZE 0
-#define DEBUG_INSTR 0 // Print instruction mnemonics as they are executed from queue
-
-#define DEBUG_LOCK 0 // Print a message when the LOCK pin is asserted on a cycle
-
+#define TRACE_RESET (0 | TRACE_ALL)
+#define TRACE_VECTOR (0 | TRACE_ALL)
+#define TRACE_LOAD (0 | TRACE_ALL)
+#define TRACE_ID (0 | TRACE_ALL)
+#define TRACE_EMU_ENTER (1 | TRACE_ALL)
+#define TRACE_EMU_EXIT (1 | TRACE_ALL)
+#define TRACE_EXECUTE (1 | TRACE_ALL)
+#define TRACE_STORE (0 | TRACE_ALL)
+#define TRACE_FINALIZE (0 | TRACE_ALL)
 // Debugging output for queue operations (flushes, regular queue ops are always reported)
-#define TRACE_QUEUE 0
+#define TRACE_QUEUE (0 | TRACE_ALL)
+
+
+#define DEBUG_ALL 0
+
 // Report state changes and time spent in each state
-#define TRACE_STATE 0
+#define DEBUG_STATE (1 | DEBUG_ALL)
+#define DEBUG_RESET (0 | DEBUG_ALL)
+#define DEBUG_LOAD_DONE (1 | DEBUG_ALL)
+#define DEBUG_STORE (0 | DEBUG_ALL)
+#define DEBUG_FINALIZE (0 | DEBUG_ALL)
+#define DEBUG_INSTR (0 | DEBUG_ALL) // Print instruction mnemonics as they are executed from queue
+#define DEBUG_EMU (1 | DEBUG_ALL) // Print debugging information concerning 8080 emulation mode state
+#define DEBUG_LOCK (0 | DEBUG_ALL) // Print a message when the LOCK pin is asserted on a cycle
+
 #define DEBUG_PROTO 0 // Insert debugging messages into serial output (Escaped by ##...##)
 #define DEBUG_CMD 0
 
@@ -105,7 +116,8 @@ typedef enum {
   CmdPrefetchStore   = 0x16,
   CmdReadAddress     = 0x17,
   CmdCpuType         = 0x18,
-  CmdInvalid         = 0x19,
+  CmdEmulate8080     = 0x19,
+  CmdInvalid         = 0x1A,
 } server_command;
 
 const char *CMD_STRINGS[] = {
@@ -134,6 +146,7 @@ const char *CMD_STRINGS[] = {
   "PREFETCHSTORE",
   "READADDRBUS",
   "CPUTYPE",
+  "EMULATE8080",
   "INVALID",
 };
 
@@ -167,7 +180,8 @@ const uint8_t CMD_ALIASES[] = {
   'f', // CmdGetCycleStatus
   'k', // CmdPrefetchStore
   'i', // CmdReadAddress
-  'k', // CmdCpuType
+  'd', // CmdCpuType
+  'h', // CmdEmulate8080
   0 // CmdInvalid
 };
 
@@ -207,6 +221,7 @@ const uint8_t CMD_INPUTS[] = {
   0,  // CmdPrefetchStore,
   0,  // CmdReadAddress
   0,  // CmdCpuType
+  0,  // CmdEmulate8080
   0,  // CmdInvalid
 };
 
@@ -214,10 +229,10 @@ typedef enum {
   WaitingForCommand = 0x01,
   ReadingCommand,
   ExecutingCommand
-} command_state;
+} command_state_t;
 
 typedef struct server_state {
-  command_state c_state;
+  command_state_t c_state;
   server_command cmd;
   uint8_t cmd_byte_n;
   uint8_t cmd_bytes_expected;
@@ -249,5 +264,6 @@ bool cmd_prefetch_store(void);
 bool cmd_read_address(void);
 bool cmd_cpu_type(void);
 bool cmd_invalid(void);
+bool cmd_emu8080(void);
 
 #endif

@@ -446,16 +446,12 @@ bool cpu_reset() {
   digitalWrite(INTR_PIN, LOW); 
   digitalWrite(NMI_PIN, LOW);
 
-  memset(&CPU, 0, sizeof CPU);
+  reset_cpu_struct();
 
   //CYCLE_NUM_H = 0;
   CYCLE_NUM = 0;
   bool ale_went_off = false;
   bool bhe_went_off = false;
-  CPU.state_begin_time = 0;
-  change_state(Reset);
-  CPU.data_bus = 0x00; 
-  init_queue();
 
   // Hold RESET high for 4 cycles
   WRITE_RESET(1);

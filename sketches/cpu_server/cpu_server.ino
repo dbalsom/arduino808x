@@ -82,6 +82,20 @@ const uint8_t CPUID_PROGRAM[] = {
   0xD6, 0x90
 };
 
+// 8080 Emulation enter program. This program executes the BRKEM opcode to enter 8080 emulation 
+// on a compatible NEC CPU such as the V20 or V30.
+// The first four bytes are used as the BRKEM vector segment and offset, and are patched with the 
+// values of CS and IP.
+uint8_t EMU_ENTER_PROGRAM[] = {
+  0x00, 0x00, 0x00, 0x00, 0x0F, 0xFF, BRKEM_VECTOR
+};
+
+// 8080 Emulation exit program. This program executes PUSH PSW to preseve the 8080 flag state,
+// then executes RETEM to exit emulation mode.
+const uint8_t EMU_EXIT_PROGRAM[] = {
+  0xF5, 0xED, 0xFD
+};
+
 // Far Jump program. We feed this program to the CPU at the reset vector. On an 8088 the reset 
 // vector is at FFFF:0000 or address FFFF0 - giving us only 16 bytes to the end of the address
 // space, where we will wrap around. We could wrap, but it gets a bit confusing, so instead 
@@ -130,6 +144,7 @@ command_func V_TABLE[] = {
   &cmd_prefetch_store,
   &cmd_read_address,
   &cmd_cpu_type,
+  &cmd_emu8080,
   &cmd_invalid
 };
 
@@ -166,8 +181,8 @@ void setup() {
   digitalWrite(AEN_PIN, LOW); // AEN is enable-low
   digitalWrite(CEN_PIN, HIGH); // Command enable enables the outputs on the i8288
 
-  // Patch the reset vector jump
-  patch_vector(JUMP_VECTOR, LOAD_SEG);
+  // Patch the reset vector jump program
+  patch_vector_pgm(JUMP_VECTOR, LOAD_SEG);
 
   cpu_id();
 
@@ -181,9 +196,30 @@ void setup() {
   SERVER.c_state = WaitingForCommand;
 }
 
+void reset_cpu_struct() {
+
+  // Retain detected cpu type, width and emulation flags.
+  cpu_type_t cpu_type = CPU.cpu_type;
+  cpu_width_t width = CPU.width;
+  bool do_emulation = CPU.do_emulation;
+
+  // Zero the CPU struct
+  memset(&CPU, 0, sizeof CPU);
+
+  // Restore retained values
+  CPU.cpu_type = cpu_type;
+  CPU.width = width;
+  CPU.do_emulation = do_emulation;
+
+  CPU.state_begin_time = 0;
+  change_state(Reset);
+  CPU.data_bus = 0x00; 
+  init_queue();
+}
+
 bool cpu_id() {
     if (!cpu_reset()) {
-        Serial1.println("Failed to reset CPU!");
+        Serial1.println("cpu_id(): Failed to reset CPU!");
         set_error("Failed to reset CPU!");
         return false;
     }
@@ -193,7 +229,7 @@ bool cpu_id() {
         cycle();
         timeout++;
         if (timeout > 200) {
-            Serial1.println("CPU ID timeout!");
+            Serial1.println("cpu_id(): CPU ID timeout!");
             set_error("CPU ID timeout!");
             return false;
         }
@@ -201,7 +237,7 @@ bool cpu_id() {
 
     size_t t_idx = CPU.cpu_type;
     if (t_idx < CPU_TYPE_COUNT) {
-      Serial1.print("Detected CPU: ");
+      Serial1.print("cpu_id(): Detected CPU: ");
       Serial1.print(CPU_TYPE_STRINGS[CPU.cpu_type]);
       Serial1.println("");
     }
@@ -294,11 +330,11 @@ bool cmd_reset() {
 }
 
 // Server command - Cpu type
-// Return a 0 if an 8-bit CPU, 1 if a 16-bit CPU
+// Return the detected CPU type
 bool cmd_cpu_type() {
   debug_cmd("CPU_TYPE", "In cmd");
   snprintf(LAST_ERR, MAX_ERR_LEN, "NO ERROR");
-  SERIAL.write((uint8_t)CPU.width);
+  SERIAL.write((uint8_t)CPU.cpu_type);
   return true;
 }
 
@@ -322,20 +358,22 @@ bool cmd_load() {
   snprintf(LAST_ERR, MAX_ERR_LEN, "NO ERROR");
 
   // Sanity check
-  if(SERVER.cmd_byte_n < sizeof LOAD_REGISTERS) {
+  if(SERVER.cmd_byte_n < sizeof (registers_t)) {
     set_error("Not enough command bytes");
     return false;
   }
 
   // Write raw command bytes over register struct.
   // All possible bit representations are valid.
-  uint8_t *read_p = (uint8_t *)&LOAD_REGISTERS;
+  uint8_t *read_p = (uint8_t *)&CPU.load_regs;
 
-  for(size_t i = 0; i < sizeof LOAD_REGISTERS; i++ ) {
+  for(size_t i = 0; i < sizeof (registers_t); i++ ) {
     *read_p++ = COMMAND_BUFFER[i];
   }
 
-  patch_load(&LOAD_REGISTERS, LOAD_PROGRAM);
+  patch_load_pgm(LOAD_PROGRAM, &CPU.load_regs);
+  patch_brkem_pgm(EMU_ENTER_PROGRAM, &CPU.load_regs);
+
   LOAD_REGISTERS.flags &= CPU_FLAG_DEFAULT_CLEAR;
   LOAD_REGISTERS.flags |= CPU_FLAG_DEFAULT_SET;
 
@@ -730,25 +768,57 @@ bool cmd_cycle_get_cycle_state(void) {
   return true;
 }
 
-void patch_vector(uint8_t *vec, uint16_t seg) {
-  *((uint16_t *)&vec[3]) = seg;
+// Server command - Enter emulation mode
+bool cmd_emu8080(void) {
+  if ((CPU.cpu_type == necV20) || (CPU.cpu_type == necV30)) {
+    // Simply toggle the emulation flag
+    CPU.do_emulation = true;
+    #if DEBUG_EMU 
+      Serial1.println("## cmd_emu8080(): Enabling 8080 emulation mode! ##");
+    #endif
+    return true;
+  }
+  // Unsupported CPU!
+  #if DEBUG_EMU 
+    Serial1.println("## cmd_emu8080(): Bad CPU type ## ");
+  #endif
+  return false;
 }
 
-void patch_load(registers *reg, uint8_t *prog) {
-  *((uint16_t *)prog) = reg->flags;
-  *((uint16_t *)&prog[LOAD_BX]) = reg->bx;
-  *((uint16_t *)&prog[LOAD_CX]) = reg->cx;
-  *((uint16_t *)&prog[LOAD_DX]) = reg->dx;
-  *((uint16_t *)&prog[LOAD_SS]) = reg->ss;
-  *((uint16_t *)&prog[LOAD_DS]) = reg->ds;
-  *((uint16_t *)&prog[LOAD_ES]) = reg->es;
-  *((uint16_t *)&prog[LOAD_SP]) = reg->sp;
-  *((uint16_t *)&prog[LOAD_BP]) = reg->bp;
-  *((uint16_t *)&prog[LOAD_SI]) = reg->si;
-  *((uint16_t *)&prog[LOAD_DI]) = reg->di;
-  *((uint16_t *)&prog[LOAD_AX]) = reg->ax;
-  *((uint16_t *)&prog[LOAD_IP]) = reg->ip;
-  *((uint16_t *)&prog[LOAD_CS]) = reg->cs;
+void patch_vector_pgm(uint8_t *pgm, uint16_t seg) {
+  *((uint16_t *)&pgm[3]) = seg;
+}
+
+void patch_load_pgm(uint8_t *pgm, registers_t *reg) {
+  *((uint16_t *)pgm) = reg->flags;
+  *((uint16_t *)&pgm[LOAD_BX]) = reg->bx;
+  *((uint16_t *)&pgm[LOAD_CX]) = reg->cx;
+  *((uint16_t *)&pgm[LOAD_DX]) = reg->dx;
+  *((uint16_t *)&pgm[LOAD_SS]) = reg->ss;
+  *((uint16_t *)&pgm[LOAD_DS]) = reg->ds;
+  *((uint16_t *)&pgm[LOAD_ES]) = reg->es;
+  *((uint16_t *)&pgm[LOAD_SP]) = reg->sp;
+  *((uint16_t *)&pgm[LOAD_BP]) = reg->bp;
+  *((uint16_t *)&pgm[LOAD_SI]) = reg->si;
+  *((uint16_t *)&pgm[LOAD_DI]) = reg->di;
+  *((uint16_t *)&pgm[LOAD_AX]) = reg->ax;
+  *((uint16_t *)&pgm[LOAD_IP]) = reg->ip;
+  *((uint16_t *)&pgm[LOAD_CS]) = reg->cs;
+}
+
+void patch_brkem_pgm(uint8_t *pgm, registers_t *regs) {
+  static char buf[20];
+  #if DEBUG_EMU 
+    Serial1.println("## Patching BRKEM program ##");
+    snprintf(buf, 20, 
+      "CS: %04X IP: %04X",
+      regs->cs,
+      regs->ip);
+    Serial1.println(buf);
+  #endif
+  uint16_t *word_ptr = (uint16_t *)pgm;
+  *word_ptr++ = regs->ip;
+  *word_ptr = regs->cs;
 }
 
 void print_registers(registers *regs) {
@@ -972,6 +1042,10 @@ void change_state(machine_state_t new_state) {
       break;
     case LoadDone:
       break;
+    case EmuEnter:
+      // Set v_pc to 4 to skip IVT segment:offset
+      CPU.v_pc = 4;
+      break;
     case Execute:
       CPU.v_pc = 0;
       CPU.s_pc = 0;
@@ -979,6 +1053,9 @@ void change_state(machine_state_t new_state) {
     case ExecuteFinalize:
       break;
     case ExecuteDone:
+      break;
+    case EmuExit:
+      CPU.v_pc = 0;
       break;
     case Store:
       // Take a raw uint8_t pointer to the register struct. Both x86 and Arduino are little-endian,
@@ -994,7 +1071,7 @@ void change_state(machine_state_t new_state) {
 
   uint32_t state_end_time = micros();
 
-  #if TRACE_STATE
+  #if DEBUG_STATE
     // Report time we spent in the previous state.
     if(CPU.state_begin_time != 0) {
       uint32_t elapsed = state_end_time - CPU.state_begin_time;
@@ -1358,13 +1435,13 @@ void cycle() {
         
         if(CPU.bus_state == MEMR) {
           // We are reading a memory byte
-          // This should only occur during Setup when flags are popped from 0:0
+          // This should only occur during Load when flags are popped from 0:0
           if(CPU.address_latch < 0x00002 ) {
             // First two bytes of LOAD_PROGRAM were patched with flags
-            CPU.data_bus = LOAD_PROGRAM[CPU.address_latch];
+            uint16_t dummy_pc = (uint16_t)CPU.address_latch;
+            CPU.data_bus = read_program(LOAD_PROGRAM, &dummy_pc, CPU.address_latch, CPU.data_width);
             CPU.data_type = DATA_PROGRAM;
             data_bus_write(CPU.data_bus, CPU.data_width);
-            
           }
           else {
             // Unexpected read above address 0x00001
@@ -1382,10 +1459,83 @@ void cycle() {
     case LoadDone:
       // LoadDone is triggered by the queue flush following the jump in Load.
       // We wait for the next ALE and begin Execute.
-      if(READ_ALE_PIN) {
-        // First bus cycle of the instruction to execute. Transition to Execute.
-        change_state(Execute);
+
+      #if DEBUG_LOAD_DONE
+        Serial1.print("LoadDone: READ_ALE_PIN=");
+        Serial1.print(READ_ALE_PIN);
+        Serial1.print(" CPU.bus_state=");
+        Serial1.println(BUS_STATE_STRINGS[(size_t)CPU.bus_state]);
+      #endif
+
+      if(READ_ALE_PIN && (CPU.bus_state == CODE)) {
+        // First bus cycle of the instruction to execute. Transition to Execute or EmuEnter as appropriate.
+        if (CPU.do_emulation && !CPU.in_emulation) {
+          change_state(EmuEnter);
+        }
+        else {
+          change_state(Execute);
+        }
       }
+      break;
+
+    case EmuEnter:
+      // We are executing the BRKEM routine.
+
+      if(!READ_MRDC_PIN) {
+        // CPU is reading (MRDC active-low)
+        if(CPU.bus_state == CODE) {      
+          // We are reading a code byte
+          if(CPU.v_pc < sizeof EMU_ENTER_PROGRAM) {
+            // Feed load program to CPU
+            CPU.data_bus = read_program(EMU_ENTER_PROGRAM, &CPU.v_pc, CPU.address_latch, CPU.data_width);
+            CPU.data_type = DATA_PROGRAM;
+          }
+          else {
+            // Ran out of program, so return NOP. 
+            CPU.data_bus = OPCODE_DOUBLENOP;
+            CPU.data_type = DATA_PROGRAM_END;
+            //change_state(LoadDone);
+          }
+          data_bus_write(CPU.data_bus, CPU.data_width);
+        }
+        
+        if(CPU.bus_state == MEMR) {
+          // We are reading a memory byte
+          // This will occur when BRKEM reads the emulation segment vector
+          uint32_t vector_base = BRKEM_VECTOR * 4;
+          if((CPU.address_latch >= vector_base ) && (CPU.address_latch < vector_base + 4)) {
+            if (CPU.address_latch < (vector_base + 2)) {
+              // Reading offset, feed IP
+              #if DEBUG_EMU
+                Serial1.println("## Reading BRKEM offset! ##");
+              #endif
+            }
+            else {
+              // Reading segment
+              #if DEBUG_EMU
+                Serial1.println("## Reading BRKEM segment! ##");
+              #endif
+            }
+            // Feed a dummy pc variable to read_program - the actual address is determined from 
+            // the address latch
+            uint16_t dummy_pc = (uint16_t)(CPU.address_latch - vector_base);
+            CPU.data_bus = read_program(EMU_ENTER_PROGRAM, &dummy_pc, CPU.address_latch, CPU.data_width);
+            CPU.data_type = DATA_PROGRAM;
+            data_bus_write(CPU.data_bus, CPU.data_width);
+          }
+          else {
+            // Unexpected read above address 0x00001
+            Serial1.println("## INVALID MEM READ DURING EMUENTER ##");
+          }
+        }
+      } 
+
+      if (q == QUEUE_FLUSHED) {
+        // Queue flush after final jump triggers next state.
+        CPU.in_emulation = true;
+        change_state(LoadDone);
+      }
+
       break;
 
     // Unlike in run_program, the Execute state in cpu_server is entirely interactive based on 
@@ -1646,6 +1796,16 @@ void cycle() {
         print_cpu_state();
       #endif  
       break;
+    case EmuEnter:
+      #if TRACE_EMU_ENTER
+        print_cpu_state();
+      #endif
+      break;
+    case EmuExit:
+      #if TRACE_EMU_EXIT
+        print_cpu_state();
+      #endif
+      break;
     case Execute:
       #if TRACE_EXECUTE
         print_cpu_state();
@@ -1687,8 +1847,6 @@ void cycle() {
       CPU.bus_state_latched = PASV;
       break;
   }
-
-
 }
 
 void print_addr(unsigned long addr) {
@@ -1697,25 +1855,26 @@ void print_addr(unsigned long addr) {
   Serial1.println(addr_buf);
 }
 
+// Detect the CPU type based on the number of CPU cycles spent executing the 
+// CPU ID program.
 void detect_cpu_type(uint32_t cpuid_cycles) {
-
   if (CPU.width == BusWidthEight) {
     if (cpuid_cycles > 5) { 
-      Serial1.println("Detected NEC V20");
+      //Serial1.println("detect_cpu_type(): Detected NEC V20");
       CPU.cpu_type = necV20;
     }
     else {
-      Serial1.println("Detected i8088");
+      //Serial1.println("detect_cpu_type(): Detected i8088");
       CPU.cpu_type = i8088;
     } 
   }
   else {
     if (cpuid_cycles > 5) { 
-      Serial1.println("Detected NEC V20");
+      //Serial1.println("detect_cpu_type(): Detected NEC V30");
       CPU.cpu_type = necV30;
     }
     else {
-      Serial1.println("Detected i8086");
+      //Serial1.println("detect_cpu_type(): Detected i8086");
       CPU.cpu_type = i8086;
     }
   }

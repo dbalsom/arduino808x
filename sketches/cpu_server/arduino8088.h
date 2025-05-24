@@ -112,16 +112,18 @@ typedef enum {
   JumpVector,
   Load,
   LoadDone,
+  EmuEnter,
   Execute,
   ExecuteFinalize,
   ExecuteDone,
+  EmuExit,
   Store,
   StoreDone,
   Done
 } machine_state_t;
 
 const char MACHINE_STATE_CHARS[] = {
-  'R', 'I', 'J', 'L', 'M', 'E', 'F', 'X', 'S', 'T', 'D'
+  'R', 'I', 'J', 'L', 'M', '8', 'E', 'F', 'X', '9', 'S', 'T', 'D'
 };
 
 const char* MACHINE_STATE_STRINGS[] = {
@@ -130,9 +132,11 @@ const char* MACHINE_STATE_STRINGS[] = {
   "JumpVector",
   "Load",
   "LoadDone",
+  "EmuEnter",
   "Execute",
   "ExecuteFinalize",
   "ExecuteDone",
+  "EmuExit",
   "Store",
   "StoreDone",
   "Done"
@@ -198,7 +202,7 @@ typedef struct registers {
   uint16_t bp;
   uint16_t si;
   uint16_t di;
-} registers __attribute__((packed)) ;
+} registers_t __attribute__((packed));
 
 // Processor instruction queue
 typedef struct queue {
@@ -246,6 +250,8 @@ typedef struct cpu {
   bool doing_id;
   cpu_type_t cpu_type; // Detected type of the CPU.
   cpu_width_t width; // Native bus width of the CPU. Detected on reset from BHE line.
+  bool do_emulation; // Flag that determines if we enter 8080 emulation mode after Load
+  bool in_emulation; // Flag set when we have entered 8080 emulation mode and cleared when we have left
   uint32_t cpuid_counter; // Cpuid cycle counter. Used to time to identify the CPU type.
   uint32_t cpuid_queue_reads; // Number of queue reads since reset of Cpuid cycle counter.
   machine_state_t v_state;
@@ -265,7 +271,8 @@ typedef struct cpu {
   uint8_t control_bits; // 8288 control outputs
   uint16_t v_pc; // Virtual program counter
   uint16_t s_pc; // Store program counter
-  registers post_regs; // Register state retrieved from Store program
+  registers_t load_regs; // Register state set by Load comamand
+  registers_t post_regs; // Register state retrieved from Store program
   uint8_t *readback_p;
   Queue queue; // Instruction queue
   uint8_t opcode; // Currently executing opcode
@@ -357,7 +364,6 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 
 #endif
 
-
 // -----------------------------Buzzer ----------------------------------------
 #define BUZZER_PIN 2
 
@@ -389,7 +395,6 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 #define LOCK_PIN 10
 #define INTR_PIN 12
 #define NMI_PIN 13
-
 
 // -------------------------- CPU Output pins ---------------------------------
 #define RQ_PIN 3
@@ -666,6 +671,7 @@ static const uint8_t BIT_REVERSE_TABLE[256] =
 // --------------------- Function declarations --------------------------------
 uint32_t calc_flat_address(uint16_t seg, uint16_t offset);
 
+void reset_cpu_struct();
 void clock_tick();
 void data_bus_write(uint16_t data, cpu_width_t width);
 uint16_t data_bus_read();
