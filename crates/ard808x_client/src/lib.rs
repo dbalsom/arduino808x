@@ -735,9 +735,28 @@ impl CpuClient {
         self.read_result_code()
     }
 
+    /// Get the per-cycle state of the CPU
     pub fn get_cycle_state(&mut self) -> Result<(ProgramState, u8, u8, u8, u16), CpuClientError> {
         let mut buf: [u8; 5] = [0; 5];
         self.send_command_byte(ServerCommand::CmdGetCycleState)?;
+        self.recv_buf(&mut buf)?;
+        self.read_result_code()?;
+
+        let state_bits: u8 = buf[0] >> 4;
+        let state = ProgramState::try_from(state_bits)?;
+
+        let control_bits = buf[0] & 0x0F;
+
+        let data_bus = u16::from_le_bytes([buf[3], buf[4]]);
+        Ok((state, control_bits, buf[1], buf[2], data_bus))
+    }
+
+    /// Like `get_cycle_state`, but also cycles the CPU. Saves a command.
+    pub fn cycle_get_cycle_state(
+        &mut self,
+    ) -> Result<(ProgramState, u8, u8, u8, u16), CpuClientError> {
+        let mut buf: [u8; 5] = [0; 5];
+        self.send_command_byte(ServerCommand::CmdCGetCycleState)?;
         self.recv_buf(&mut buf)?;
         self.read_result_code()?;
 
