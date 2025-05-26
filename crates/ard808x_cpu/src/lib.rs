@@ -54,9 +54,6 @@ static NULL_PRELOAD_PGM: [u8; 0] = [];
 static INTEL808X_PRELOAD_PGM: [u8; 4] = [0xAA, 0xAA, 0xAA, 0xAA]; // (4x stosb)
 static NECVX0_PRELOAD_PGM: [u8; 2] = [0x63, 0xC0]; // (undefined, no side effects)
 
-static BRKEM_PGM: [u8; 3] = [0x0F, 0xFF, 0xFF]; // BRKEM FFh
-static RETEM_PGM: [u8; 2] = [0xED, 0xFD]; // RETEM
-
 static INTEL_PREFIXES: [u8; 8] = [0x26, 0x2E, 0x36, 0x3E, 0xF0, 0xF1, 0xF2, 0xF3];
 static NEC_PREFIXES: [u8; 10] = [0x26, 0x2E, 0x36, 0x3E, 0xF0, 0xF1, 0xF2, 0xF3, 0x64, 0x65];
 
@@ -225,8 +222,6 @@ pub enum BusCycle {
 #[derive(Copy, Clone, Debug)]
 pub struct PrintOptions {
     pub print_pgm: bool,
-    pub print_emu_enter: bool,
-    pub print_emu_exit: bool,
     pub print_preload: bool,
     pub print_finalize: bool,
 }
@@ -235,8 +230,6 @@ impl Default for PrintOptions {
     fn default() -> Self {
         Self {
             print_pgm: true,
-            print_emu_enter: false,
-            print_emu_exit: false,
             print_preload: false,
             print_finalize: false,
         }
@@ -248,14 +241,12 @@ pub enum RunState {
     #[default]
     Init,
     Preload,
-    EmuEnter,
     Program,
-    EmuExit,
     Finalize,
 }
 
 pub struct RemoteCpu<'a> {
-    cpu_type: CpuType,
+    cpu_type: ServerCpuType,
     width: CpuWidth,
     client: CpuClient,
     regs: RemoteCpuRegisters,
@@ -271,8 +262,6 @@ pub struct RemoteCpu<'a> {
 
     active_pgm: Option<&'a RemoteProgram>,
     preload_pgm: Option<RemoteProgram>,
-    emu_enter_pgm: Option<RemoteProgram>,
-    emu_exit_pgm: Option<RemoteProgram>,
     code_stream: CodeStream,
     program_end_offset: u16,
 
@@ -318,7 +307,6 @@ pub struct RemoteCpu<'a> {
 
 impl RemoteCpu<'_> {
     pub fn new(
-        cpu_type: CpuType,
         mut client: CpuClient,
         do_prefetch: bool,
         do_emu8080: bool,
@@ -341,19 +329,40 @@ impl RemoteCpu<'_> {
             }
         };
 
+        log::debug!("Detected CPU type: {:?}", server_cpu_type);
+
+        if do_emu8080 {
+            if !server_cpu_type.has_8080_emulation() {
+                log::error!("Emulation mode requested but detected CPU type does not support it.");
+                std::process::exit(1);
+            } else {
+                match client.emu8080() {
+                    Ok(_) => {
+                        log::debug!("Emulation mode enabled for CPU type: {:?}", server_cpu_type);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to enable emulation mode: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+
         let mut preload_pgm = None;
 
         if do_prefetch {
             if server_cpu_type.can_prefetch() {
-                log::trace!("Using prefetch program for {:?}", cpu_type);
-                preload_pgm = match cpu_type {
-                    CpuType::Intel8088 => Some(RemoteProgram::new(
-                        &INTEL808X_PRELOAD_PGM,
-                        OPCODE_NOP,
-                        width,
-                    )),
-                    CpuType::NecV20 => {
+                log::trace!("Using prefetch program for {:?}", server_cpu_type);
+                preload_pgm = match server_cpu_type {
+                    ServerCpuType::Intel8088 | ServerCpuType::Intel8086 => Some(
+                        RemoteProgram::new(&INTEL808X_PRELOAD_PGM, OPCODE_NOP, width),
+                    ),
+                    ServerCpuType::NecV20 | ServerCpuType::NecV30 => {
                         Some(RemoteProgram::new(&NECVX0_PRELOAD_PGM, OPCODE_NOP, width))
+                    }
+                    _ => {
+                        log::error!("Unsupported CPU type for prefetch: {:?}", server_cpu_type);
+                        None
                     }
                 };
 
@@ -366,17 +375,24 @@ impl RemoteCpu<'_> {
             }
         }
 
-        let mut emu_enter_pgm = None;
-        let mut emu_exit_pgm = None;
-
-        if do_emu8080 && cpu_type.has_8080_emulation() {
-            log::debug!("CPU will enter emulation mode.");
-            emu_enter_pgm = Some(RemoteProgram::new(&BRKEM_PGM, OPCODE_NOP, width));
-            emu_exit_pgm = Some(RemoteProgram::new(&RETEM_PGM, OPCODE_NOP, width));
+        if do_emu8080 && server_cpu_type.has_8080_emulation() {
+            match client.emu8080() {
+                Ok(result_code) if result_code == true => {
+                    log::debug!("8080 Emulation flag successfully set.");
+                }
+                Err(e) => {
+                    log::error!("Failed to set emulation mode flag!");
+                    std::process::exit(1);
+                }
+                _ => {
+                    log::error!("Failed to set emulation mode flag!");
+                    std::process::exit(1);
+                }
+            };
         }
 
         RemoteCpu {
-            cpu_type,
+            cpu_type: server_cpu_type,
             width,
             client,
             regs: Default::default(),
@@ -392,8 +408,6 @@ impl RemoteCpu<'_> {
 
             active_pgm: None,
             preload_pgm,
-            emu_enter_pgm,
-            emu_exit_pgm,
             code_stream: CodeStream::new(width),
             program_end_offset: 0,
 
@@ -438,8 +452,6 @@ impl RemoteCpu<'_> {
         self.run_state = RunState::default();
 
         self.preload_pgm.as_mut().map(|p| p.reset());
-        self.emu_enter_pgm.as_mut().map(|p| p.reset());
-        self.emu_exit_pgm.as_mut().map(|p| p.reset());
         self.code_stream = CodeStream::new(self.width);
         self.program_end_offset = 0;
         self.address_bus = 0;
@@ -472,7 +484,11 @@ impl RemoteCpu<'_> {
         self.pc = ((cs as usize) << 4) + ip as usize;
     }
 
-    pub fn get_pc(&self) -> usize {
+    pub fn cpu_type(&self) -> ServerCpuType {
+        self.cpu_type
+    }
+
+    pub fn pc(&self) -> usize {
         self.pc
     }
 
@@ -526,7 +542,7 @@ impl RemoteCpu<'_> {
             self.memory[(isr_address + 1) as usize] = OPCODE_NOP;
         }
 
-        if self.do_emu8080 && matches!(self.cpu_type, CpuType::NecV20) {
+        if self.do_emu8080 && self.cpu_type.has_8080_emulation() {
             self.setup_emulation_ivt();
         }
     }
@@ -583,22 +599,17 @@ impl RemoteCpu<'_> {
                 .wrapping_sub((preload_pgm.len() + preload_pgm.get_fill_ct()) as u16);
 
             if preload_pgm.len() > 0 {
-                match self.cpu_type {
-                    CpuType::Intel8088 => {
-                        log::trace!("Adjusting registers for 8088 prefetch...");
-                        // (4x stosb)
+                if self.cpu_type.is_intel() {
+                    log::trace!("Adjusting registers for 8088 prefetch...");
+                    // (4x stosb)
 
-                        // Adjust DI. This depends on the state of the Direction flag.
-                        if regs.flags & CPU_FLAG_DIRECTION == 0 {
-                            // Direction forward. Decrement DI.
-                            regs.di = regs.di.wrapping_sub(4);
-                        } else {
-                            // Direction backwards. Increment DI.
-                            regs.di = regs.di.wrapping_add(4);
-                        }
-                    }
-                    CpuType::NecV20 => {
-                        // No extra register modification required as we use 0x63 with no side effects.
+                    // Adjust DI. This depends on the state of the Direction flag.
+                    if regs.flags & CPU_FLAG_DIRECTION == 0 {
+                        // Direction forward. Decrement DI.
+                        regs.di = regs.di.wrapping_sub(4);
+                    } else {
+                        // Direction backwards. Increment DI.
+                        regs.di = regs.di.wrapping_add(4);
                     }
                 }
             }
@@ -703,10 +714,6 @@ impl RemoteCpu<'_> {
         matches!(self.run_state, RunState::Preload)
     }
 
-    pub fn in_emu_enter(&self) -> bool {
-        matches!(self.run_state, RunState::EmuEnter)
-    }
-
     pub fn fetch_from_memory(&mut self, address: u32, end_address: u32) -> u16 {
         let data = self.read_memory(address);
 
@@ -717,12 +724,22 @@ impl RemoteCpu<'_> {
                 if address >= (end_address.wrapping_sub(1)) {
                     // Replace high byte with NOP.
                     self.program_end_offset += 1;
-                    (data & 0xFF) | ((OPCODE_NOP as u16) << 8)
+                    (data & 0xFF) | ((self.nop() as u16) << 8)
                 } else {
                     data
                 }
             }
             _ => data,
+        }
+    }
+
+    /// Return a NOP instruction for the current emulation mode.
+    #[inline]
+    pub fn nop(&self) -> u8 {
+        if self.do_emu8080 {
+            OPCODE_NOP80
+        } else {
+            OPCODE_NOP
         }
     }
 
@@ -869,51 +886,6 @@ impl RemoteCpu<'_> {
                                 );
                             }
                         }
-                        RunState::EmuEnter => {
-                            if self.have_emu_enter_pgm() {
-                                // EmuEnter program is being fetched.
-                                self.queue.push(
-                                    self.data_bus,
-                                    self.data_width,
-                                    QueueDataType::Preload,
-                                    self.address_latch,
-                                );
-                            } else {
-                                log::trace!(
-                                    "EmuEnter: program pushed to queue: {}",
-                                    self.data_bus_str()
-                                );
-                                // We are in EmuEnter state, but have exhausted the EmuEnter program. Mark the next byte to be put
-                                // in queue to signal start of main program.
-                                self.queue.push(
-                                    self.data_bus,
-                                    self.data_width,
-                                    QueueDataType::Program,
-                                    self.address_latch,
-                                );
-                            }
-                        }
-                        RunState::EmuExit => {
-                            if self.have_emu_exit_pgm() {
-                                // EmuExit program is being fetched.
-                                self.queue.push(
-                                    self.data_bus,
-                                    self.data_width,
-                                    QueueDataType::EmuExit,
-                                    self.address_latch,
-                                );
-                            } else {
-                                log::trace!("EmuExit: exhausted exit program. Tagging queue to finalize execution.");
-                                // We are in EmuExit state, but have exhausted the EmuExit program. Mark the next byte to be put
-                                // in queue to signal start of finalization.
-                                self.queue.push(
-                                    self.data_bus,
-                                    self.data_width,
-                                    QueueDataType::Finalize,
-                                    self.address_latch,
-                                );
-                            }
-                        }
                         _ if self.address_in_bounds() => {
                             // Normal fetch within program boundaries
                             self.queue.push(
@@ -926,25 +898,14 @@ impl RemoteCpu<'_> {
                         _ => {
                             // We have fetched past the end of the current program, so push a flagged NOP into the queue.
                             // When a byte flagged with Finalize is read we will enter the Finalize state.
-                            if self.do_emu8080 {
-                                log::trace!("Fetch out of bounds: [{:05X}], in emulation mode. Tagging fetch as [EmuExit].", self.address_latch);
-                                // If we entered emulation, we must transition to EmuExit before we can finalize.
-                                self.queue.push(
-                                    self.data_bus,
-                                    self.data_width,
-                                    QueueDataType::EmuExit,
-                                    self.address_latch,
-                                );
-                            } else {
-                                log::trace!("Fetch out of bounds: [{:05X}], in native mode. Tagging fetch as [Finalize].", self.address_latch);
-                                // If we did not enter emulation, then we can immediately move to finalize.
-                                self.queue.push(
-                                    self.data_bus,
-                                    self.data_width,
-                                    QueueDataType::Finalize,
-                                    self.address_latch,
-                                );
-                            }
+                            log::trace!("Fetch out of bounds: [{:05X}], in native mode. Tagging fetch as [Finalize].", self.address_latch);
+                            // If we did not enter emulation, then we can immediately move to finalize.
+                            self.queue.push(
+                                self.data_bus,
+                                self.data_width,
+                                QueueDataType::Finalize,
+                                self.address_latch,
+                            );
                         }
                     }
                 }
@@ -1020,47 +981,6 @@ impl RemoteCpu<'_> {
                                     false
                                 }
                             }
-                            RunState::EmuEnter if self.have_emu_enter_pgm() => {
-                                // Feed the CPU the EmuEnter program instead of memory.
-                                let program = self.emu_enter_pgm.as_mut().unwrap();
-
-                                program.read_program(
-                                    a0,
-                                    &mut self.code_stream,
-                                    QueueDataType::Program,
-                                );
-                                if !self.code_stream.is_empty() {
-                                    let value = self.code_stream.pop_data_bus();
-                                    log::trace!(
-                                        "Writing [EmuEnter] program: [{:0X}]",
-                                        value.bus_value()
-                                    );
-                                    self.data_bus = value.bus_value();
-                                    true
-                                } else {
-                                    false
-                                }
-                            }
-                            RunState::EmuExit if self.have_emu_exit_pgm() => {
-                                // Feed the CPU the EmuEnter program instead of memory.
-                                let program = self.emu_exit_pgm.as_mut().unwrap();
-                                program.read_program(
-                                    a0,
-                                    &mut self.code_stream,
-                                    QueueDataType::Program,
-                                );
-                                if !self.code_stream.is_empty() {
-                                    let value = self.code_stream.pop_data_bus();
-                                    log::trace!(
-                                        "Writing [EmuExit] program: [{:0X}]",
-                                        value.bus_value()
-                                    );
-                                    self.data_bus = value.bus_value();
-                                    true
-                                } else {
-                                    false
-                                }
-                            }
                             _ => false,
                         };
 
@@ -1100,7 +1020,7 @@ impl RemoteCpu<'_> {
                                     //         OPCODE_NOPS
                                     //     }
                                     // }
-                                    RunState::EmuExit | RunState::Finalize => {
+                                    RunState::Finalize => {
                                         write_store = true;
                                     }
                                     _ => {
@@ -1302,30 +1222,6 @@ impl RemoteCpu<'_> {
         self.client.finalize().expect("Failed to finalize!");
     }
 
-    pub fn advance_run_state_on_fetch(&mut self) {
-        self.run_state = match self.run_state {
-            RunState::Program if !self.address_in_bounds() => {
-                // Transition to next state
-                if self.do_emu8080 {
-                    log::trace!("Entering EmuExit state on fetch...");
-                    RunState::EmuExit
-                } else {
-                    //log::trace!("Finalizing execution from [Program] on fetch...");
-                    //self.finalize();
-                    //RunState::Finalize
-                    self.run_state
-                }
-            }
-            RunState::EmuExit if !self.have_emu_exit_pgm() => {
-                //log::trace!("Finalizing execution from [EmuExit] on fetch...");
-                //self.finalize();
-                //RunState::Finalize
-                self.run_state
-            }
-            _ => self.run_state,
-        }
-    }
-
     pub fn advance_run_state_on_queue_read(&mut self) {
         match self.run_state {
             RunState::Preload => {
@@ -1335,18 +1231,6 @@ impl RemoteCpu<'_> {
                 }
                 if self.queue_type == QueueDataType::EmuEnter {
                     panic!("Can't preload into emulation mode!");
-                }
-            }
-            RunState::EmuEnter => {
-                if self.queue_type == QueueDataType::Program {
-                    log::trace!("Ending [EmuEnter] program, entering main Program!");
-                    self.run_state = RunState::Program;
-                }
-            }
-            RunState::Program => {
-                if self.queue_type == QueueDataType::EmuExit {
-                    log::trace!("Ending main Program, entering [EmuExit] Program!");
-                    self.run_state = RunState::EmuExit;
                 }
             }
             _ => {}
@@ -1470,12 +1354,13 @@ impl RemoteCpu<'_> {
         // Handle queue activity
         let mut q_read_str = "       |".to_string();
 
-        let decode_arch = match self.cpu_type {
-            CpuType::Intel8088 => DecodeArch::Intel8088,
-            CpuType::NecV20 => match self.run_state {
+        let decode_arch = if self.cpu_type.is_intel() {
+            DecodeArch::Intel8088
+        } else {
+            match self.run_state {
                 RunState::Program if self.do_emu8080 => DecodeArch::Intel8080,
                 _ => DecodeArch::Intel8088,
-            },
+            }
         };
 
         if q_op == QueueOp::First {
@@ -1577,32 +1462,10 @@ impl RemoteCpu<'_> {
         }
     }
 
-    pub fn have_emu_enter_pgm(&self) -> bool {
-        if let Some(program) = &self.emu_enter_pgm {
-            !program.is_finished()
-        } else {
-            false
-        }
-    }
-
-    pub fn have_emu_exit_pgm(&self) -> bool {
-        if let Some(program) = &self.emu_exit_pgm {
-            !program.is_finished()
-        } else {
-            false
-        }
-    }
-
     pub fn print_run_state(&self, print_opts: &PrintOptions) {
         //log::trace!("print_run_state: {:?}", self.run_state);
         match self.run_state {
             RunState::Preload if print_opts.print_preload => {
-                self.print_cpu_state();
-            }
-            RunState::EmuEnter if print_opts.print_emu_enter => {
-                self.print_cpu_state();
-            }
-            RunState::EmuExit if print_opts.print_emu_exit => {
                 self.print_cpu_state();
             }
             RunState::Program if print_opts.print_pgm => {
@@ -1625,9 +1488,6 @@ impl RemoteCpu<'_> {
             preload_pgm.reset();
             log::trace!("Entering [Preload] run state");
             self.run_state = RunState::Preload;
-        } else if self.do_emu8080 {
-            log::trace!("Entering [EmuEnter] run state");
-            self.run_state = RunState::EmuEnter;
         } else {
             log::trace!("Entering [Program] run state");
             self.run_state = RunState::Program;
@@ -1702,11 +1562,11 @@ impl RemoteCpu<'_> {
         true
     }
 
-    pub fn print_reg_buf(regbuf: &[u8], cpu_type: CpuType) {
-        Self::print_regs(&RemoteCpuRegisters::from(regbuf), cpu_type);
+    pub fn print_reg_buf(reg_buf: &[u8], cpu_type: ServerCpuType) {
+        Self::print_regs(&RemoteCpuRegisters::from(reg_buf), cpu_type);
     }
 
-    pub fn print_regs(regs: &RemoteCpuRegisters, cpu_type: CpuType) {
+    pub fn print_regs(regs: &RemoteCpuRegisters, cpu_type: ServerCpuType) {
         let reg_str = format!(
             "AX: {:04X} BX: {:04X} CX: {:04X} DX: {:04X}\n\
           SP: {:04X} BP: {:04X} SI: {:04X} DI: {:04X}\n\
@@ -1754,14 +1614,13 @@ impl RemoteCpu<'_> {
             'd'
         };
         let o_chr = if CPU_FLAG_OVERFLOW & f != 0 { 'O' } else { 'o' };
-        let m_chr = match cpu_type {
-            CpuType::Intel8088 => '1',
-            CpuType::NecV20 => {
-                if CPU_FLAG_MODE & f != 0 {
-                    'M'
-                } else {
-                    'm'
-                }
+        let m_chr = if cpu_type.is_intel() {
+            '1'
+        } else {
+            if f & CPU_FLAG_MODE != 0 {
+                'M'
+            } else {
+                'm'
             }
         };
 
@@ -1774,7 +1633,7 @@ impl RemoteCpu<'_> {
     pub fn print_regs_delta(
         initial: &RemoteCpuRegisters,
         regs: &RemoteCpuRegisters,
-        cpu_type: CpuType,
+        cpu_type: ServerCpuType,
     ) {
         let a_diff = initial.ax != regs.ax;
         let b_diff = initial.bx != regs.bx;
@@ -1851,14 +1710,13 @@ impl RemoteCpu<'_> {
             'd'
         };
         let o_chr = if CPU_FLAG_OVERFLOW & f != 0 { 'O' } else { 'o' };
-        let m_chr = match cpu_type {
-            CpuType::Intel8088 => '1',
-            CpuType::NecV20 => {
-                if CPU_FLAG_MODE & f != 0 {
-                    'M'
-                } else {
-                    'm'
-                }
+        let m_chr = if cpu_type.is_intel() {
+            '1'
+        } else {
+            if f & CPU_FLAG_MODE != 0 {
+                'M'
+            } else {
+                'm'
             }
         };
 

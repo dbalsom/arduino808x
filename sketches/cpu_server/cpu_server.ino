@@ -91,9 +91,12 @@ uint8_t EMU_ENTER_PROGRAM[] = {
 };
 
 // 8080 Emulation exit program. This program executes PUSH PSW to preseve the 8080 flag state,
-// then executes RETEM to exit emulation mode.
+// then POP PSW to restore BP, then executes RETEM to exit emulation mode.
 const uint8_t EMU_EXIT_PROGRAM[] = {
-  0xF5, 0xED, 0xFD
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 6 NOPs to hide program from client
+  0xF5, 0x00, // PUSH PSW, NOP
+  0x33, 0x33, // INX SP, INX SP to restore 8080 stack pointer
+  0xED, 0xFD, // RETEM
 };
 
 // Far Jump program. We feed this program to the CPU at the reset vector. On an 8088 the reset 
@@ -196,15 +199,21 @@ void setup() {
   SERVER.c_state = WaitingForCommand;
 }
 
-void reset_cpu_struct() {
+void reset_cpu_struct(bool reset_load_regs) {
 
   // Retain detected cpu type, width and emulation flags.
   cpu_type_t cpu_type = CPU.cpu_type;
   cpu_width_t width = CPU.width;
   bool do_emulation = CPU.do_emulation;
+  registers_t load_regs = CPU.load_regs;
 
   // Zero the CPU struct
   memset(&CPU, 0, sizeof CPU);
+
+  if(!reset_load_regs) {
+    // Restore regs
+    CPU.load_regs = load_regs;
+  }
 
   // Restore retained values
   CPU.cpu_type = cpu_type;
@@ -247,6 +256,31 @@ bool cpu_id() {
     }
 
     return true;
+}
+
+// Read a byte from the data bus. The half of the bus to read is determined 
+// by BHE and A0.
+uint8_t data_bus_read_byte() {
+  CPU.data_bus = data_bus_read(CPU.data_width);
+  if (!READ_BHE_PIN) {
+    // High byte is active.
+    return (uint8_t)(CPU.data_bus >> 8);
+  }
+  else {
+    // Low byte is active.
+    return (uint8_t)CPU.data_bus;
+  }
+}
+
+void data_bus_set_byte(uint8_t byte) {
+    if (!READ_BHE_PIN) {
+    // High byte is active.
+    CPU.data_bus = ((uint16_t)byte) << 8;
+  }
+  else {
+    // Low byte is active.
+    CPU.data_bus = (uint16_t)byte;
+  }
 }
 
 void clear_error() {
@@ -374,6 +408,8 @@ bool cmd_load() {
   patch_load_pgm(LOAD_PROGRAM, &CPU.load_regs);
   patch_brkem_pgm(EMU_ENTER_PROGRAM, &CPU.load_regs);
 
+  Serial1.println("## Loaded CS ##");
+  Serial1.println(CPU.load_regs.cs);
   LOAD_REGISTERS.flags &= CPU_FLAG_DEFAULT_CLEAR;
   LOAD_REGISTERS.flags |= CPU_FLAG_DEFAULT_SET;
 
@@ -538,30 +574,50 @@ bool cmd_write_data_bus() {
 }
 
 // Server command - PrefetchStore
-// Instructs the CPU server to load the next byte of the store program early
+// Instructs the CPU server to load the next byte of the Store (or EmuExit) program early
 // Should be called in place of cmd_write_data_bus() by host on T3/TwLast when 
 // program bytes have been exhausted.
 // (When we are prefetching past execution boundaries during main program execution)
 bool cmd_prefetch_store() {
-  if (CPU.s_pc >= sizeof STORE_PROGRAM) {
-    set_error("Store program underflow");
-    return false;
-  }
-  CPU.prefetching_store = true;
-  CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
-  CPU.data_type = DATA_PROGRAM_END;
-  //CPU.data_bus = STORE_PROGRAM[CPU.s_pc];
 
-  // s_pc is advanced during cycle() to avoid duplicated increments
+  if (CPU.in_emulation) {
+    // Prefetch the EmuExit program
+    if (CPU.s_pc >= sizeof EMU_EXIT_PROGRAM) {
+      set_error("EmuExit program underflow");
+      return false;
+    }
+
+    #if DEBUG_STORE
+      Serial1.print("## PREFETCH_EMU_EXIT: s_pc: ");
+    #endif
+
+    CPU.prefetching_store = true;
+    CPU.data_bus = read_program(EMU_EXIT_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
+    CPU.data_type = DATA_PROGRAM_END;
+  }
+  else {
+    // Prefetch the Store program
+    if (CPU.s_pc >= sizeof STORE_PROGRAM) {
+      set_error("Store program underflow");
+      return false;
+    }
+
+    #if DEBUG_STORE
+      Serial1.print("## PREFETCH_STORE: s_pc: ");
+    #endif
+
+    CPU.prefetching_store = true;
+    CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
+    CPU.data_type = DATA_PROGRAM_END;
+  }
+
   #if DEBUG_STORE
-    Serial1.print("## PREFETCH_STORE: s_pc: ");
     Serial1.print(CPU.s_pc);
     Serial1.print(" addr: ");
     Serial1.print(CPU.address_latch, 16);
-    Serial1.print(" byte: ");
-    Serial1.println(STORE_PROGRAM[CPU.s_pc], 16);
+    Serial1.print(" data: ");
+    Serial1.println(CPU.data_bus, 16);
   #endif
-
 
   return true;
 }
@@ -574,12 +630,20 @@ bool cmd_finalize() {
     change_state(ExecuteFinalize);
 
     // Wait for execute done state
-    int execute_timeout = 0;
+    int execute_ct = 0;
+    int timeout = FINALIZE_TIMEOUT;
+    if (CPU.in_emulation) {
+      // We need more time to exit emulation mode
+      timeout = FINALIZE_EMU_TIMEOUT;
+    }
     while(CPU.v_state != ExecuteDone) {
       cycle();
-      execute_timeout++;
-      if(execute_timeout > FINALIZE_TIMEOUT) {
-        set_error("cmd_finalize: state timeout");
+      execute_ct++;
+
+      
+
+      if(execute_ct > timeout) {
+        set_error("cmd_finalize(): state timeout");
         return false;
       }
     }
@@ -587,7 +651,7 @@ bool cmd_finalize() {
   }
   else {
     error_beep();
-    set_error("cmd_finalize: wrong state: ");
+    set_error("cmd_finalize(): wrong state: ");
     Serial1.println(CPU.v_state);
     return false;
   }
@@ -620,14 +684,14 @@ bool cmd_begin_store(void) {
 bool cmd_store(void) {
 
   #if DEBUG_STORE
-    Serial1.print("IN STORE: s_pc is: ");
+    Serial1.print("## In STORE: s_pc is: ");
     Serial1.println(CPU.s_pc);
   #endif
 
   char err_msg[30];
   // Command only valid in Store
   if(CPU.v_state != ExecuteDone) {
-    snprintf(err_msg, 30, "Store: Wrong state: %d ", CPU.v_state);
+    snprintf(err_msg, 30, "STORE: Wrong state: %d ", CPU.v_state);
 
     set_error(err_msg);
     return false;
@@ -649,6 +713,11 @@ bool cmd_store(void) {
       return false;
     }
   }
+
+  #if DEBUG_EMU
+    Serial1.print("## STORE: Flags are: ");
+    Serial1.println(CPU.post_regs.flags, 16);
+  #endif
 
   // Dump final register state to Serial port
   uint8_t *reg_p = (uint8_t *)&CPU.post_regs;
@@ -1003,7 +1072,7 @@ void print_cpu_state() {
     Serial1.print(q_buf);
   }
   else if(q == QUEUE_SUBSEQUENT) {
-    if(IS_GRP_OP(CPU.opcode) && CPU.q_fn == 1) {
+    if(!CPU.in_emulation && IS_GRP_OP(CPU.opcode) && CPU.q_fn == 1) {
       // Modrm was just fetched for a group opcode, so display the mnemonic now
       snprintf(q_buf, 15, " <-q %02X %s", CPU.qb, get_opcode_str(CPU.opcode, CPU.qb, true));
     }
@@ -1043,18 +1112,27 @@ void change_state(machine_state_t new_state) {
     case LoadDone:
       break;
     case EmuEnter:
+      CPU.stack_r_op_ct = 0;
+      CPU.stack_w_op_ct = 0;
       // Set v_pc to 4 to skip IVT segment:offset
       CPU.v_pc = 4;
       break;
     case Execute:
       CPU.v_pc = 0;
       CPU.s_pc = 0;
+      if (CPU.do_emulation) {
+        // Set v_pc to 4 to skip IVT segment:offset
+        CPU.s_pc = 4;
+      }
+      
       break;
     case ExecuteFinalize:
       break;
     case ExecuteDone:
       break;
     case EmuExit:
+      CPU.stack_r_op_ct = 0;
+      CPU.stack_w_op_ct = 0;
       CPU.v_pc = 0;
       break;
     case Store:
@@ -1299,10 +1377,16 @@ void cycle() {
         CPU.s_pc = 0;
       }
       else if (CPU.s_pc >= CPU.queue.len) {
-        CPU.s_pc -= CPU.queue.len;
+        uint16_t pc_adjust = (uint16_t)CPU.queue.len;
+
+        if ((pc_adjust & 1) && (CPU.width == BusWidthSixteen)) {
+          // If we have an odd queue length and 16-bit fetches, account for one more byte
+          pc_adjust++;
+        }
+        CPU.s_pc -= pc_adjust;
         #if DEBUG_STORE
-          Serial1.print("## FLUSHed STORE bytes: Adjusted s_pc by queue_len: ");
-          Serial1.print(CPU.queue.len);
+          Serial1.print("## FLUSHed STORE bytes: Adjusted s_pc by: ");
+          Serial1.print(pc_adjust);
           Serial1.print(" new s_pc: ");
           Serial1.println(CPU.s_pc);
         #endif
@@ -1500,7 +1584,7 @@ void cycle() {
         }
         
         if(CPU.bus_state == MEMR) {
-          // We are reading a memory byte
+          // We are reading from memory
           // This will occur when BRKEM reads the emulation segment vector
           uint32_t vector_base = BRKEM_VECTOR * 4;
           if((CPU.address_latch >= vector_base ) && (CPU.address_latch < vector_base + 4)) {
@@ -1529,6 +1613,37 @@ void cycle() {
           }
         }
       } 
+
+      if(!READ_MWTC_PIN) {
+        if (CPU.width == BusWidthEight) {
+          // Flags will be read in two operations
+          if (CPU.stack_w_op_ct == 0) {
+            #if DEBUG_EMU
+              Serial1.println("## Reading BRKEM flag push (1/2)! ##");
+            #endif
+            CPU.pre_emu_flags = (uint16_t)data_bus_read_byte();
+          }
+          else if (CPU.stack_w_op_ct == 1) {
+            #if DEBUG_EMU
+              Serial1.println("## Reading BRKEM flag push (2/2)! ##");
+            #endif      
+            CPU.pre_emu_flags |= ((uint16_t)data_bus_read_byte() << 8);
+          }
+          CPU.stack_w_op_ct++;
+        }
+        else {
+          // Flags will be read in one operation
+          if (CPU.stack_w_op_ct == 0) {
+            #if DEBUG_EMU
+              Serial1.println("## Reading BRKEM flag push! ##");
+            #endif
+            // CPU is writing to the data bus, latch value
+            CPU.data_bus = data_bus_read(CPU.data_width);
+            CPU.pre_emu_flags = CPU.data_bus;
+          }
+          CPU.stack_w_op_ct++;
+        }
+      }
 
       if (q == QUEUE_FLUSHED) {
         // Queue flush after final jump triggers next state.
@@ -1579,15 +1694,21 @@ void cycle() {
       if (!READ_MRDC_PIN && CPU.bus_state == PASV) {
         // CPU is reading (MRDC active-low)
         if ((CPU.bus_state_latched == CODE) && (CPU.prefetching_store)) {
-          // Since client does not cycle the CPU in this state, we have to fetch from 
-          // STORE program ourselves
+          // Since client does not cycle the CPU in this state, we have to fetch from the 
+          // STORE or EMU_EXIT program ourselves
 
-          CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
-          //CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
+          const uint8_t *program = STORE_PROGRAM;
+          uint16_t *pc_ptr = &CPU.s_pc;
+          if (CPU.in_emulation) {
+            program = EMU_EXIT_PROGRAM;
+            pc_ptr = &CPU.v_pc;
+          }
+          
+          CPU.data_bus = read_program(program, pc_ptr, CPU.address_latch, CPU.data_width);
           CPU.data_type = DATA_PROGRAM_END;
           data_bus_write(CPU.data_bus, CPU.data_width);
           #if DEBUG_STORE
-            Serial1.print("STORE: Wrote STORE PGM BYTE to bus (in FINALIZE): ");
+            Serial1.print("ExecuteFinalize: Wrote next PGM word to bus: ");
             Serial1.print(CPU.data_bus, 16);
             Serial1.print(" new s_pc: ");
             Serial1.println(CPU.s_pc);
@@ -1601,8 +1722,155 @@ void cycle() {
       if(CPU.q_ff && (CPU.qt == DATA_PROGRAM_END)) {
         // We read a flagged NOP, meaning the previous instruction has completed and it is safe to 
         // execute the Store routine.
-        change_state(ExecuteDone);
+        if (CPU.in_emulation) {
+          change_state(EmuExit);
+        }
+        else {
+          change_state(ExecuteDone);
+        }
       }
+      break;
+
+    case EmuExit:
+      if (!READ_MRDC_PIN) {
+        // CPU is reading (MRDC active-low)
+        if ((CPU.bus_state_latched == CODE) && (CPU.bus_state == PASV)) {
+          // CPU is doing code fetch
+          if(CPU.s_pc < sizeof EMU_EXIT_PROGRAM) {
+            // Read code byte from EmuExit program
+            CPU.data_bus = read_program(EMU_EXIT_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
+            #if DEBUG_EMU
+              Serial1.print("## EMUEXIT: fetching byte: ");
+              Serial1.print(CPU.data_bus, 16);
+              Serial1.print(" new s_pc: ");
+              Serial1.println(CPU.s_pc);
+            #endif
+            CPU.data_type = DATA_PROGRAM;
+          }
+          else {
+            CPU.data_bus = OPCODE_DOUBLENOP;
+            CPU.data_type = DATA_PROGRAM_END;
+          }
+          data_bus_write(CPU.data_bus, CPU.data_width);
+        }
+
+        if((CPU.bus_state_latched == MEMR) && (CPU.bus_state == PASV)) {
+          // CPU is doing memory read
+          // This will occur when RETEM pops IP, CS and Flags from the stack.
+
+          if (CPU.width == BusWidthEight) {
+            // Stack values will be read in two operations
+            if (CPU.stack_r_op_ct == 0) {
+
+            }
+            else if (CPU.stack_r_op_ct == 1) {
+
+            }
+            else if (CPU.stack_r_op_ct == 2) {
+              #if DEBUG_EMU
+                Serial1.println("## Reading RETEM CS pop (1/2)! ##");
+                Serial1.println(CPU.load_regs.cs);
+              #endif              
+              // Write the low byte of CS to the data bus
+              data_bus_set_byte((uint8_t)(CPU.load_regs.cs));
+            }
+            else if (CPU.stack_r_op_ct == 3) {
+              #if DEBUG_EMU
+                Serial1.println("## Reading RETEM CS pop (2/2)! ##");
+                Serial1.println(CPU.load_regs.cs);
+              #endif  
+              // Write the high byte of CS to the data bus
+              data_bus_set_byte((uint8_t)(CPU.load_regs.cs >> 8));              
+            }            
+            else if (CPU.stack_r_op_ct == 4) {
+              #if DEBUG_EMU
+                Serial1.println("## Reading RETEM flag pop (1/2)! ##");
+              #endif
+              // Write the low byte of flags to the data bus
+              data_bus_set_byte((uint8_t)(CPU.pre_emu_flags));
+            }
+            else if (CPU.stack_r_op_ct == 5) {
+              #if DEBUG_EMU
+                Serial1.println("## Reading RETEM flag pop (2/2)! ##");
+              #endif      
+              // Write the high byte of flags to the data bus
+              data_bus_set_byte((uint8_t)(CPU.pre_emu_flags >> 8));
+              // Exit emulation mode
+              CPU.in_emulation = false;
+              change_state(ExecuteFinalize);
+            }
+            else {
+              // Not flags, just write 0's so we jump back to CS:IP 0000:0000
+              CPU.data_bus = 0;
+            }
+            CPU.stack_r_op_ct++;
+          }
+          else {
+            // Sixteen-bit data bus
+
+            if (CPU.stack_r_op_ct == 0) {
+              // IP is read in one operation
+              #if DEBUG_EMU
+                Serial1.println("## Reading RETEM IP pop! ##");
+              #endif              
+              CPU.data_bus = 0;
+            }
+            else if (CPU.stack_r_op_ct == 1) {
+              // CS is read in one operation
+              #if DEBUG_EMU
+                Serial1.println("## Reading RETEM CS pop! ##");
+                Serial1.println(CPU.load_regs.cs);
+              #endif              
+              // We can restore CS from the loaded registers since CS cannot be modified in 8080 emulation mode
+              CPU.data_bus = CPU.load_regs.cs;
+            }
+            else if (CPU.stack_r_op_ct == 2) {
+              // Flags will be read in one operation
+              #if DEBUG_EMU
+                Serial1.println("## Reading RETEM Flag pop! ##");
+              #endif
+              // CPU is writing to the data bus, latch value
+              CPU.data_bus = CPU.pre_emu_flags;
+              // Exit emulation mode
+              CPU.in_emulation = false;
+              change_state(ExecuteFinalize);
+            }
+            CPU.stack_r_op_ct++;
+          }
+          data_bus_write(CPU.data_bus, CPU.data_width);
+        }
+      }
+
+      if (!READ_MWTC_PIN && (CPU.bus_state_latched == MEMW) && (CPU.bus_state == PASV)) {
+        // CPU is writing. This should only happen during EmuExit when we PUSH PSW 
+        // to save the 8080 flags. 
+
+        CPU.data_bus = data_bus_read(CPU.data_width);
+
+        if (CPU.data_width == BusWidthEight) {
+          // 8-bit data bus
+          if (CPU.stack_w_op_ct == 0) {
+            // Flags will be in first byte written (second byte will be AL)
+            #if DEBUG_EMU
+              Serial1.println("## Capturing PUSH PSW stack write! ##");
+            #endif
+            CPU.emu_flags = (uint8_t)CPU.data_bus;
+          }
+          CPU.stack_w_op_ct++;
+        }
+        else {
+          // 16-bit data bus
+          if (CPU.stack_w_op_ct == 0) {
+            // Flags were pushed in one operation. 
+            #if DEBUG_EMU
+              Serial1.println("## Capturing PUSH PSW stack write! ##");
+            #endif            
+            CPU.emu_flags = (uint8_t)CPU.data_bus;
+          }
+          CPU.stack_w_op_ct++;
+        }
+      }
+
       break;
 
     case ExecuteDone:
@@ -1636,9 +1904,6 @@ void cycle() {
 
     case Store:
       // We are executing the Store program.
-
-      //set_error("We are in Store");
-      
       if (!READ_MRDC_PIN && CPU.bus_state == PASV) {
         // CPU is reading
         
@@ -1658,7 +1923,7 @@ void cycle() {
 
           }
           else {
-            CPU.data_bus = 0x90;
+            CPU.data_bus = OPCODE_DOUBLENOP;
             CPU.data_type = DATA_PROGRAM_END;
           }
         }
@@ -1675,18 +1940,45 @@ void cycle() {
         if(CPU.address_latch < 0x00004) {
 
           #if DEBUG_STORE
-            Serial1.println("## Store Stack Push");
+            Serial1.println("## STORE Stack Push");
           #endif
+
+          // Write flags and IP to the register struct
           if (CPU.data_width == EightLow) {
+            #if DEBUG_EMU
+              Serial1.print("## 8-bit flag read ##");
+            #endif
             *CPU.readback_p = (uint8_t)CPU.data_bus;
             CPU.readback_p++;
           }
           else if (CPU.data_width == EightHigh) {
+            // We shouldn't have unaligned stack access during STORE. Something has gone wrong.
             Serial1.println("## Bad Data Bus Width during Store: EightHigh");
           }
           else {
-            *(uint16_t *)CPU.readback_p = CPU.data_bus;
+            // 16-bit data bus
+            if((CPU.address_latch == 0x00002) && (CPU.do_emulation)) {
+              // We ran a program in 8080 emulation. We want to substitute the flags 
+              // captured in 8080 mode for the native flags now.
+              CPU.data_bus = (CPU.data_bus & 0xFF00) | (uint16_t)CPU.emu_flags;
+              #if DEBUG_EMU
+                Serial1.print("## Substituting 8080 flags in stack read: ");
+                Serial1.println(CPU.data_bus, 16);
+              #endif
+              
+            }
+
+            ptrdiff_t diff = (uint8_t *)&CPU.post_regs.flags - CPU.readback_p;            
+            *((uint16_t *)CPU.readback_p) = CPU.data_bus;
             CPU.readback_p += 2;
+
+            #if DEBUG_EMU
+              uint16_t *flags_ptr = (uint16_t *)&CPU.post_regs.flags;          
+              Serial1.print("## New flags are: ");
+              Serial1.println(*flags_ptr, 16);
+              Serial1.print("## Readback ptr diff: ");
+              Serial1.println(diff);
+            #endif
           }
         }
         else {

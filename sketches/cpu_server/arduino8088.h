@@ -271,7 +271,11 @@ typedef struct cpu {
   uint8_t control_bits; // 8288 control outputs
   uint16_t v_pc; // Virtual program counter
   uint16_t s_pc; // Store program counter
-  registers_t load_regs; // Register state set by Load comamand
+  uint16_t stack_r_op_ct; // Number of stack read operations in current state
+  uint16_t stack_w_op_ct; // Number of stack write operations in current state
+  uint16_t pre_emu_flags; // Flags pushed to stack by BRKEM
+  uint8_t emu_flags; // Flags pushed to stack by PUSH PSW during EmuExit program
+  registers_t load_regs; // Register state set by Load command
   registers_t post_regs; // Register state retrieved from Store program
   uint8_t *readback_p;
   Queue queue; // Instruction queue
@@ -671,7 +675,7 @@ static const uint8_t BIT_REVERSE_TABLE[256] =
 // --------------------- Function declarations --------------------------------
 uint32_t calc_flat_address(uint16_t seg, uint16_t offset);
 
-void reset_cpu_struct();
+void reset_cpu_struct(bool reset_regs);
 void clock_tick();
 void data_bus_write(uint16_t data, cpu_width_t width);
 uint16_t data_bus_read();

@@ -8,9 +8,8 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    // The type of CPU connected to the Arduino8088
-    #[arg(long, required(true))]
-    cpu_type: CpuType,
+    #[arg(long)]
+    com_port: Option<String>,
 
     // The binary file containing the register data. Produced from an assembly
     // file 'program_regs.asm'
@@ -82,7 +81,7 @@ fn main() {
     }
 
     // Create a cpu_client connection to cpu_server.
-    let cpu_client = match CpuClient::init() {
+    let cpu_client = match CpuClient::init(args.com_port.clone()) {
         Ok(ard_client) => {
             println!("Opened connection to Arduino_8088 server!");
             ard_client
@@ -95,7 +94,6 @@ fn main() {
 
     // Create a remote cpu instance using the cpu_client which should now be connected.
     let mut cpu = RemoteCpu::new(
-        args.cpu_type,
         cpu_client,
         args.prefetch,
         args.emu8080,
@@ -104,6 +102,9 @@ fn main() {
         args.intr_after,
         args.nmi_on,
     );
+
+    let cpu_type = cpu.cpu_type();
+    log::debug!("Detected CPU type: {:?}", cpu_type);
 
     // Capture initial regs before adjustment.
     let initial_regs = RemoteCpuRegisters::from(reg_bytes.as_slice());
@@ -122,12 +123,10 @@ fn main() {
 
         println!("Initial register state:");
 
-        RemoteCpu::print_regs(&initial_regs, args.cpu_type);
+        RemoteCpu::print_regs(&initial_regs, cpu_type);
 
         let print_opts = PrintOptions {
             print_pgm: true,
-            print_emu_enter: false,
-            print_emu_exit: false,
             print_preload: false,
             print_finalize: false,
         };
@@ -136,7 +135,7 @@ fn main() {
         match cpu.run(Some(10_000), &print_opts) {
             Ok(regs) => {
                 println!("Final register state:");
-                RemoteCpu::print_regs_delta(&initial_regs, &regs, args.cpu_type);
+                RemoteCpu::print_regs_delta(&initial_regs, &regs, cpu_type);
             }
             Err(_) => {
                 log::error!("Program execution failed!");

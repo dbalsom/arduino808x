@@ -8,7 +8,7 @@ org	0h
 ; Specify the initial register state by modifying the values below.
 ; Assembling this file creates a BIN file representing the initial register state.
 ; Do not modify the order of the registers or add extra data.
-dw 0x0000 ; AX
+dw 0x1234 ; AX
 dw 0x0000 ; BX
 dw 0x0000 ; CX
 dw 0x0000 ; DX

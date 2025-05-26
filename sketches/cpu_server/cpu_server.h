@@ -49,16 +49,15 @@
 // Note: tracing a STORE operation will likely cause it to timeout on the client.
 #define TRACE_RESET (0 | TRACE_ALL)
 #define TRACE_VECTOR (0 | TRACE_ALL)
-#define TRACE_LOAD (0 | TRACE_ALL)
+#define TRACE_LOAD (1 | TRACE_ALL)
 #define TRACE_ID (0 | TRACE_ALL)
 #define TRACE_EMU_ENTER (1 | TRACE_ALL)
 #define TRACE_EMU_EXIT (1 | TRACE_ALL)
 #define TRACE_EXECUTE (1 | TRACE_ALL)
-#define TRACE_STORE (0 | TRACE_ALL)
-#define TRACE_FINALIZE (0 | TRACE_ALL)
+#define TRACE_STORE (1 | TRACE_ALL)
+#define TRACE_FINALIZE (1 | TRACE_ALL)
 // Debugging output for queue operations (flushes, regular queue ops are always reported)
 #define TRACE_QUEUE (0 | TRACE_ALL)
-
 
 #define DEBUG_ALL 0
 
@@ -66,7 +65,7 @@
 #define DEBUG_STATE (1 | DEBUG_ALL)
 #define DEBUG_RESET (0 | DEBUG_ALL)
 #define DEBUG_LOAD_DONE (1 | DEBUG_ALL)
-#define DEBUG_STORE (0 | DEBUG_ALL)
+#define DEBUG_STORE (1 | DEBUG_ALL)
 #define DEBUG_FINALIZE (0 | DEBUG_ALL)
 #define DEBUG_INSTR (0 | DEBUG_ALL) // Print instruction mnemonics as they are executed from queue
 #define DEBUG_EMU (1 | DEBUG_ALL) // Print debugging information concerning 8080 emulation mode state
@@ -77,8 +76,11 @@
 
 #define MAX_ERR_LEN 50 // Maximum length of an error string
 
+
 #define FINALIZE_TIMEOUT 30
+#define FINALIZE_EMU_TIMEOUT 90 // We need more time to exit emulation mode
 #define STORE_TIMEOUT 300
+
 
 const char RESPONSE_CHRS[] = {
   '!', '.'

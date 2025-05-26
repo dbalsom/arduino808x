@@ -7,7 +7,6 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
-
 [lib]
 name = "ard808x_cpu"
 path = "src/lib.rs"

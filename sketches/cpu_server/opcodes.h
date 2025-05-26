@@ -24,7 +24,10 @@
 #define _ARDUINO8088_OPCODES_H
 
 #define OPCODE_NOP 0x90
+#define OPCODE_80NOP 0x00
 #define OPCODE_DOUBLENOP 0x9090
+#define OPCODE_DOUBLE_80NOP 0x0000
+
 #define MODRM_OP(M) (((M & 0b00111000) >> 3) & 0x07)
 
 #define GRP1 105
@@ -334,7 +337,7 @@ static char *OPCODE_8080_STRS[] = {
   "CM",
   "CPI",
   "INVAL",
-  "SPECIAL",
+  "EXT",
 };
 
 #endif 

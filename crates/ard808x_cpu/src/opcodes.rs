@@ -1,7 +1,8 @@
-
 pub const OPCODE_IRET: u8 = 0xCF;
 pub const OPCODE_NOP: u8 = 0x90;
 pub const OPCODE_NOPS: u16 = 0x9090;
+pub const OPCODE_NOP80: u8 = 0x00; // NOP for 8080
+pub const OPCODE_NOPS80: u16 = 0x0000; // NOP for 8080
 pub const OPCODE_NMI_TRIGGER: u8 = 0xF1; // Undefined opcode to use as NMI trigger
 
 /*
@@ -23,7 +24,7 @@ macro_rules! modrm_op {
 pub fn is_prefix(op1: u8) -> bool {
     match op1 {
         0x26 | 0x2E | 0x36 | 0x3E | 0xF0..=0xF3 => true,
-        _ => false
+        _ => false,
     }
 }
 
@@ -35,12 +36,8 @@ pub fn is_group_op(op1: u8) -> bool {
 // opcode, op2 should be specified and modrm set to true.
 pub fn get_opcode_str(op1: u8, op2: u8, modrm: bool, decode_arch: DecodeArch) -> &'static str {
     let op_idx: usize = match decode_arch {
-        DecodeArch::Intel8088 => {
-            OPCODE_REFS[op1 as usize]
-        }
-        DecodeArch::Intel8080 => {
-            OPCODE_8080_REFS[op1 as usize]
-        }
+        DecodeArch::Intel8088 => OPCODE_REFS[op1 as usize],
+        DecodeArch::Intel8080 => OPCODE_8080_REFS[op1 as usize],
     };
 
     if !modrm {
@@ -53,8 +50,7 @@ pub fn get_opcode_str(op1: u8, op2: u8, modrm: bool, decode_arch: DecodeArch) ->
                 return OPCODE_8080_STRS[op_idx];
             }
         }
-    }
-    else {
+    } else {
         // modrm is in use, check if this is a group instruction...
         if is_group_op(op1) {
             // Lookup opcode group
@@ -67,10 +63,9 @@ pub fn get_opcode_str(op1: u8, op2: u8, modrm: bool, decode_arch: DecodeArch) ->
                 GRP3 => OPCODE_STRS_GRP3[grp_idx],
                 GRP4 => OPCODE_STRS_GRP4[grp_idx],
                 GRP5 => OPCODE_STRS_GRP5[grp_idx],
-                _ => "ERROR"
+                _ => "ERROR",
             }
-        }
-        else {
+        } else {
             // Not a group instruction, just return as normal
             OPCODE_STRS[op_idx]
         }
@@ -114,274 +109,45 @@ const OPCODE_8080_REFS: [usize; 256] = [
 ];
 
 const OPCODE_STRS: &[&str] = &[
-    "ADD",
-    "PUSH",
-    "POP",
-    "OR",
-    "ADC",
-    "SBB",
-    "AND",
-    "ES",
-    "DAA",
-    "SUB",
-    "CS",
-    "DAS",
-    "XOR",
-    "SS",
-    "AAA",
-    "CMP",
-    "DS",
-    "AAS",
-    "INC",
-    "DEC",
-    "JO",
-    "JNO",
-    "JB",
-    "JNB",
-    "JZ",
-    "JNZ",
-    "JBE",
-    "JNBE",
-    "JS",
-    "JNS",
-    "JP",
-    "JNP",
-    "JL",
-    "JNL",
-    "JLE",
-    "JNLE",
-    "TEST",
-    "XCHG",
-    "MOV",
-    "LEA",
-    "CBW",
-    "CWD",
-    "CALLF",
-    "PUSHF",
-    "POPF",
-    "SAHF",
-    "LAHF",
-    "MOVSB",
-    "MOVSW",
-    "CMPSB",
-    "CMPSW",
-    "STOSB",
-    "STOSW",
-    "LODSB",
-    "LODSW",
-    "SCASB",
-    "SCASW",
-    "RETN",
-    "LES",
-    "LDS",
-    "RETF",
-    "INT",
-    "INTO",
-    "IRET",
-    "ROL",
-    "ROR",
-    "RCL",
-    "RCR",
-    "SHL",
-    "SHR",
-    "SAR",
-    "AAM",
-    "AMX",
-    "AAD",
-    "ADX",
-    "XLAT",
-    "LOOPNE",
-    "LOOPE",
-    "LOOP",
-    "JCXZ",
-    "IN",
-    "OUT",
-    "CALL",
-    "JMP",
-    "JMPF",
-    "LOCK",
-    "REPNZ",
-    "REP",
-    "REPZ",
-    "HLT",
-    "CMC",
-    "NOT",
-    "NEG",
-    "MUL",
-    "IMUL",
-    "DIV",
-    "IDIV",
-    "CLC",
-    "STC",
-    "CLI",
-    "STI",
-    "CLD",
-    "STD",
-    "WAIT",
-    "INVAL",
-    "GRP1",
-    "GRP2A",
-    "GRP3",
-    "GRP4",
-    "GRP5",
-    "GRP2B",
-    "NOP",
+    "ADD", "PUSH", "POP", "OR", "ADC", "SBB", "AND", "ES", "DAA", "SUB", "CS", "DAS", "XOR", "SS",
+    "AAA", "CMP", "DS", "AAS", "INC", "DEC", "JO", "JNO", "JB", "JNB", "JZ", "JNZ", "JBE", "JNBE",
+    "JS", "JNS", "JP", "JNP", "JL", "JNL", "JLE", "JNLE", "TEST", "XCHG", "MOV", "LEA", "CBW",
+    "CWD", "CALLF", "PUSHF", "POPF", "SAHF", "LAHF", "MOVSB", "MOVSW", "CMPSB", "CMPSW", "STOSB",
+    "STOSW", "LODSB", "LODSW", "SCASB", "SCASW", "RETN", "LES", "LDS", "RETF", "INT", "INTO",
+    "IRET", "ROL", "ROR", "RCL", "RCR", "SHL", "SHR", "SAR", "AAM", "AMX", "AAD", "ADX", "XLAT",
+    "LOOPNE", "LOOPE", "LOOP", "JCXZ", "IN", "OUT", "CALL", "JMP", "JMPF", "LOCK", "REPNZ", "REP",
+    "REPZ", "HLT", "CMC", "NOT", "NEG", "MUL", "IMUL", "DIV", "IDIV", "CLC", "STC", "CLI", "STI",
+    "CLD", "STD", "WAIT", "INVAL", "GRP1", "GRP2A", "GRP3", "GRP4", "GRP5", "GRP2B", "NOP",
 ];
 
 // 0x80 - 0x81
-const OPCODE_STRS_GRP1: &[&str] = &[
-    "ADD",
-    "OR",
-    "ADC",
-    "SBB",
-    "AND",
-    "SUB",
-    "XOR",
-    "CMP"
-];
+const OPCODE_STRS_GRP1: &[&str] = &["ADD", "OR", "ADC", "SBB", "AND", "SUB", "XOR", "CMP"];
 
 // 0xD0 - 0xD1
-const OPCODE_STRS_GRP2A: &[&str] = &[
-    "ROL",
-    "ROR",
-    "RCL",
-    "RCR",
-    "SHL",
-    "SHR",
-    "SETMO",
-    "SAR"
-];
+const OPCODE_STRS_GRP2A: &[&str] = &["ROL", "ROR", "RCL", "RCR", "SHL", "SHR", "SETMO", "SAR"];
 
 // 0xD2 - 0xD3
-const OPCODE_STRS_GRP2B: &[&str] = &[
-    "ROL",
-    "ROR",
-    "RCL",
-    "RCR",
-    "SHL",
-    "SHR",
-    "SETMOC",
-    "SAR"
-];
+const OPCODE_STRS_GRP2B: &[&str] = &["ROL", "ROR", "RCL", "RCR", "SHL", "SHR", "SETMOC", "SAR"];
 
 // 0xF6 - 0xF7
-const OPCODE_STRS_GRP3: &[&str] = &[
-    "TEST",
-    "TEST",
-    "NOT",
-    "NEG",
-    "MUL",
-    "IMUL",
-    "DIV",
-    "IDIV",
-];
+const OPCODE_STRS_GRP3: &[&str] = &["TEST", "TEST", "NOT", "NEG", "MUL", "IMUL", "DIV", "IDIV"];
 
 // 0xFE
 const OPCODE_STRS_GRP4: &[&str] = &[
-    "INC",
-    "DEC",
-    "INVAL",
-    "INVAL",
-    "INVAL",
-    "INVAL",
-    "INVAL",
-    "INVAL"
+    "INC", "DEC", "INVAL", "INVAL", "INVAL", "INVAL", "INVAL", "INVAL",
 ];
 
 // 0xFF
 const OPCODE_STRS_GRP5: &[&str] = &[
-    "INC",
-    "DEC",
-    "CALL",
-    "CALLF",
-    "JMP",
-    "JMPF",
-    "PUSH",
-    "INVAL"
+    "INC", "DEC", "CALL", "CALLF", "JMP", "JMPF", "PUSH", "INVAL",
 ];
 
 const OPCODE_8080_STRS: &[&str] = &[
-    "NOP",
-    "LXI",
-    "STAX",
-    "INX",
-    "INR",
-    "DCR",
-    "MVI",
-    "RLC",
-    "DAD",
-    "LDAX",
-    "DCX",
-    "RRC",
-    "RAL",
-    "RAR",
-    "SHLD",
-    "DAA",
-    "LHLD",
-    "CMA",
-    "STA",
-    "STC",
-    "LDA",
-    "CMC",
-    "MOV",
-    "HLT",
-    "ADD",
-    "ADC",
-    "SUB",
-    "SBB",
-    "ANA",
-    "XRA",
-    "ORA",
-    "CMP",
-    "RNZ",
-    "POP",
-    "JNZ",
-    "JMP",
-    "CNZ",
-    "PUSH",
-    "ADI",
-    "RST",
-    "RZ",
-    "RET",
-    "JZ",
-    "CZ",
-    "CALL",
-    "ACI",
-    "RNC",
-    "JNC",
-    "OUT",
-    "CNC",
-    "SUI",
-    "RC",
-    "JC",
-    "IN",
-    "CC",
-    "SBI",
-    "RPO",
-    "JPO",
-    "XTHL",
-    "CPO",
-    "ANI",
-    "RPE",
-    "PCHL",
-    "JPE",
-    "XCHG",
-    "CPE",
-    "CALLN",
-    "RETEM",
-    "XRI",
-    "RP",
-    "JP",
-    "DI",
-    "CP",
-    "ORI",
-    "RM",
-    "SPHL",
-    "JM",
-    "EI",
-    "CM",
-    "CPI",
-    "INVAL",
-    "SPECIAL",
+    "NOP", "LXI", "STAX", "INX", "INR", "DCR", "MVI", "RLC", "DAD", "LDAX", "DCX", "RRC", "RAL",
+    "RAR", "SHLD", "DAA", "LHLD", "CMA", "STA", "STC", "LDA", "CMC", "MOV", "HLT", "ADD", "ADC",
+    "SUB", "SBB", "ANA", "XRA", "ORA", "CMP", "RNZ", "POP", "JNZ", "JMP", "CNZ", "PUSH", "ADI",
+    "RST", "RZ", "RET", "JZ", "CZ", "CALL", "ACI", "RNC", "JNC", "OUT", "CNC", "SUI", "RC", "JC",
+    "IN", "CC", "SBI", "RPO", "JPO", "XTHL", "CPO", "ANI", "RPE", "PCHL", "JPE", "XCHG", "CPE",
+    "CALLN", "RETEM", "XRI", "RP", "JP", "DI", "CP", "ORI", "RM", "SPHL", "JM", "EI", "CM", "CPI",
+    "INVAL", "SPECIAL",
 ];
-

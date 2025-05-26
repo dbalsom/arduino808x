@@ -27,7 +27,7 @@ fn main() {
     env_logger::init();
 
     // Create a cpu_client connection to cpu_server.
-    let mut cpu_client = match CpuClient::init() {
+    let mut cpu_client = match CpuClient::init(None) {
         Ok(ard_client) => {
             println!("Opened connection to Arduino_808X server!");
             ard_client

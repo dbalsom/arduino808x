@@ -446,7 +446,7 @@ bool cpu_reset() {
   digitalWrite(INTR_PIN, LOW); 
   digitalWrite(NMI_PIN, LOW);
 
-  reset_cpu_struct();
+  reset_cpu_struct(false);
 
   //CYCLE_NUM_H = 0;
   CYCLE_NUM = 0;
@@ -669,11 +669,39 @@ void error_beep() {
 
 // ----------------------------------Opcodes-----------------------------------
 
+
+const char *get_opcode_str(uint8_t op1, uint8_t op2, bool modrm) {
+  if (CPU.in_emulation) {
+    return get_80_opcode_str(op1, op2);
+  }
+  else {
+    return get_86_opcode_str(op1, op2, modrm);
+  }
+}
+
+const char *get_80_opcode_str(uint8_t op1, uint8_t op2) {
+  size_t op_idx = (size_t)OPCODE_8080_REFS[op1];
+
+  if (op1 == 0xED) {
+    if (op2 == 0xEF) {
+      return "CALLN";
+    }
+    else if (op2 == 0xFD) {
+      return "RETEM";
+    }
+    else {
+      return "INVAL";
+    }
+  }
+
+  return OPCODE_8080_STRS[(size_t)op_idx];
+}
+
 // Return the mnemonic name for the specified opcode. If the opcode is a group
 // opcode, op2 should be specified and modrm set to true.
-const char *get_opcode_str(uint8_t op1, uint8_t op2, bool modrm) {
+const char *get_86_opcode_str(uint8_t op1, uint8_t op2, bool modrm) {
 
-  size_t op_idx = OPCODE_REFS[op1];
+  size_t op_idx = (size_t)OPCODE_REFS[op1];
   size_t grp_idx = 0;
 
   if(!modrm) {
