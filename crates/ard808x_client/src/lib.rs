@@ -148,7 +148,7 @@ impl From<CpuWidth> for usize {
 }
 
 /// [ServerCommand] represents the commands that can be sent to the Arduino808X server.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum ServerCommand {
     CmdNull = 0x00,
     CmdVersion = 0x01,
@@ -180,7 +180,7 @@ pub enum ServerCommand {
 }
 
 /// [ProgramState] represents the current state of the Arduino808X server.
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ProgramState {
     Reset = 0,
     CpuId,
@@ -221,7 +221,7 @@ impl TryFrom<u8> for ProgramState {
 }
 
 /// [Segment] represents the segment registers in the CPU.
-#[derive(PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Segment {
     ES = 0,
     SS,
@@ -230,7 +230,7 @@ pub enum Segment {
 }
 
 /// [QueueOp] represents the operation performed on the instruction queue on the last cycle.
-#[derive(PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum QueueOp {
     Idle = 0,
     First,
@@ -239,7 +239,7 @@ pub enum QueueOp {
 }
 
 /// [BusState] represents the current state of the bus as decoded by the CPU S0-S2 status lines.
-#[derive(PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BusState {
     INTA = 0, // IRQ Acknowledge
     IOR = 1,  // IO Read
@@ -252,7 +252,7 @@ pub enum BusState {
 }
 
 /// [CpuPin] represents the miscellaneous CPU pins that can be read or written to.
-#[derive(PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum CpuPin {
     READY = 0,
     TEST,
