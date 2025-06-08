@@ -1,6 +1,6 @@
 /*
-    Arduino8088 Copyright 2022-2025 Daniel Balsom
-    https://github.com/dbalsom/arduino_8088
+    ArduinoX86 Copyright 2022-2025 Daniel Balsom
+    https://github.com/dbalsom/arduinoX86
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the “Software”),
@@ -20,17 +20,34 @@
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
 */
+
+// This module defines parameters you can adjust to control the behavior 
+// of the CPU server and what messages are output to the debugging serial port.
+
+// In normal operation you want to define TRACE_NONE to 1 or you risk timing
+// out your serial operations as cycle-by-cycle trace logs are very slow.
+
 #ifndef _CPU_SERVER_H
 #define _CPU_SERVER_H
 
-// Baud rate is ignored for Arduino DUE as it uses native SerialUSB.
+// Define this for either a 186 or a 188, we will detect the bus width.
+#define CPU_186 1
+
+// Baud rate is ignored for Arduino DUE as it uses native SerialUSB. This is legacy.
+// YOU SHOULD BE USING A DUE.
+//
+// For Arduino MEGA, Arduino-branded MEGAs should use 460800 baud. ELEGOO branded MEGAs 
+// can use 1000000. 
+// You can test higher values but these are the values I determined to work without errors.
+// Actual limits may be board-specific!
 //#define BAUD_RATE 460800
 #define BAUD_RATE 1000000
 
-// Debug baud rate controls Serial1 speed. Check the documentation of your RS232 interface
+// DEBUG_BAUD_RATE controls the Serial1 speed. Check the documentation of your RS232 interface
 // for maximum rated speed. Exceeding it will cause dropped characters or other corruption.
-//#define DEBUG_BAUD_RATE 230400
-#define DEBUG_BAUD_RATE 460800
+// The popular MAX3232 module has a maximum rate of 250Kbps, so should use a baud rate of 230400.
+// The TRS3122E module specified in the BOM can support 1Mbit. I have been using 460800 with it.
+#define DEBUG_BAUD_RATE 460800 // Use for TRS3122E 
 
 #define CMD_TIMEOUT 100 // Command timeout in milliseconds
 #define MAX_COMMAND_BYTES 28 // Maximum length of command parameter input
@@ -39,38 +56,41 @@
 
 #define BRKEM_VECTOR ((uint8_t)0x00)
 
-// Print a dot to the debugging output on each load.
+// Print a character to the debugging output on each load command.
 #define LOAD_INDICATOR 1
+// Print a character to the debugging output on each store command.
 #define STORE_INDICATOR 1
 
-#define TRACE_ALL 0
+#define TRACE_ALL 0 // TRACE_ALL will enable all traces (TRACE_NONE overrides)
+#define TRACE_NONE 1 // TRACE_NONE will override all set traces
 
 // These defines control tracing and debugging output for each state.
 // Note: tracing a STORE operation will likely cause it to timeout on the client.
-#define TRACE_RESET (0 | TRACE_ALL)
-#define TRACE_VECTOR (0 | TRACE_ALL)
-#define TRACE_LOAD (1 | TRACE_ALL)
-#define TRACE_ID (0 | TRACE_ALL)
-#define TRACE_EMU_ENTER (1 | TRACE_ALL)
-#define TRACE_EMU_EXIT (1 | TRACE_ALL)
-#define TRACE_EXECUTE (1 | TRACE_ALL)
-#define TRACE_STORE (1 | TRACE_ALL)
-#define TRACE_FINALIZE (1 | TRACE_ALL)
-// Debugging output for queue operations (flushes, regular queue ops are always reported)
-#define TRACE_QUEUE (0 | TRACE_ALL)
+#define TRACE_RESET     ((1 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_VECTOR    ((1 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_LOAD      ((0 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_ID        ((0 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_EMU_ENTER ((0 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_EMU_EXIT  ((0 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_EXECUTE   ((1 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_STORE     ((1 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_FINALIZE  ((0 | TRACE_ALL) & ~TRACE_NONE)
 
-#define DEBUG_ALL 0
+#define DEBUG_ALL 0  // DEBUG_ALL will enable all debugs (DEBUG_NONE overrides)
+#define DEBUG_NONE 0 // DEBUG_NONE will override all set debugs
 
-// Report state changes and time spent in each state
-#define DEBUG_STATE (1 | DEBUG_ALL)
-#define DEBUG_RESET (0 | DEBUG_ALL)
-#define DEBUG_LOAD_DONE (1 | DEBUG_ALL)
-#define DEBUG_STORE (1 | DEBUG_ALL)
-#define DEBUG_FINALIZE (0 | DEBUG_ALL)
-#define DEBUG_INSTR (0 | DEBUG_ALL) // Print instruction mnemonics as they are executed from queue
-#define DEBUG_EMU (1 | DEBUG_ALL) // Print debugging information concerning 8080 emulation mode state
-#define DEBUG_LOCK (0 | DEBUG_ALL) // Print a message when the LOCK pin is asserted on a cycle
-
+#define DEBUG_STATE     ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Report state changes and time spent in each state
+#define DEBUG_RESET     ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Print info about the reset process
+#define DEBUG_VECTOR    ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Print info about jump vector program execution
+#define DEBUG_LOAD      ((1 | DEBUG_ALL) & ~DEBUG_NONE)
+#define DEBUG_LOAD_DONE ((0 | DEBUG_ALL) & ~DEBUG_NONE)
+#define DEBUG_STORE     ((1 | DEBUG_ALL) & ~DEBUG_NONE)
+#define DEBUG_FINALIZE  ((1 | DEBUG_ALL) & ~DEBUG_NONE)
+#define DEBUG_INSTR     ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Print instruction mnemonics as they are executed from queue
+#define DEBUG_EMU       ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Print debugging information concerning 8080 emulation mode state
+#define DEBUG_LOCK      ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Print a message when the LOCK pin is asserted on a cycle
+#define DEBUG_QUEUE     ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Debugging output for queue operations (flushes, regular queue ops are always reported)
+#define DEBUG_TSTATE    ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Info about t-state changes (mostly T3/Tw->T4)
 #define DEBUG_PROTO 0 // Insert debugging messages into serial output (Escaped by ##...##)
 #define DEBUG_CMD 0
 
@@ -91,6 +111,54 @@ const char VERSION_DAT[] = {
 };
 
 const uint8_t VERSION_NUM = 2;
+
+// States for main program state machine:
+// ----------------------------------------------------------------------------
+// Reset - CPU is being reset
+// JumpVector - CPU is jumping from reset vector to load segment (optional?)
+// Load - CPU is executing register Load program
+// LoadDone - CPU has finished executing Load program and waiting for program execution to start
+// Execute - CPU is executing user program
+// Store - CPU has is executing register Store program
+typedef enum {
+  Reset = 0,
+  CpuId,
+  CpuSetup,
+  JumpVector,
+  Load,
+  LoadDone,
+  EmuEnter,
+  Prefetch,
+  Execute,
+  ExecuteFinalize,
+  ExecuteDone,
+  EmuExit,
+  Store,
+  StoreDone,
+  Done
+} machine_state_t;
+
+const char MACHINE_STATE_CHARS[] = {
+  'R', 'I', 'C', 'J', 'L', 'M', '8', 'P', 'E', 'F', 'X', '9', 'S', 'T', 'D'
+};
+
+const char* MACHINE_STATE_STRINGS[] = {
+  "Reset",
+  "CpuId",
+  "CpuSetup",
+  "JumpVector",
+  "Load",
+  "LoadDone",
+  "EmuEnter",
+  "Prefetch",
+  "Execute",
+  "ExecuteFinalize",
+  "ExecuteDone",
+  "EmuExit",
+  "Store",
+  "StoreDone",
+  "Done"
+};
 
 typedef enum {
   CmdNone            = 0x00,
@@ -119,7 +187,8 @@ typedef enum {
   CmdReadAddress     = 0x17,
   CmdCpuType         = 0x18,
   CmdEmulate8080     = 0x19,
-  CmdInvalid         = 0x1A,
+  CmdPrefetch        = 0x1A,
+  CmdInvalid         = 0x1B,
 } server_command;
 
 const char *CMD_STRINGS[] = {
@@ -149,6 +218,7 @@ const char *CMD_STRINGS[] = {
   "READADDRBUS",
   "CPUTYPE",
   "EMULATE8080",
+  "PREFETCH",
   "INVALID",
 };
 
@@ -184,6 +254,7 @@ const uint8_t CMD_ALIASES[] = {
   'i', // CmdReadAddress
   'd', // CmdCpuType
   'h', // CmdEmulate8080
+  'p', // CmdPrefetch
   0 // CmdInvalid
 };
 
@@ -224,6 +295,7 @@ const uint8_t CMD_INPUTS[] = {
   0,  // CmdReadAddress
   0,  // CmdCpuType
   0,  // CmdEmulate8080
+  0,  // CmdPrefetch
   0,  // CmdInvalid
 };
 
@@ -239,7 +311,7 @@ typedef struct server_state {
   uint8_t cmd_byte_n;
   uint8_t cmd_bytes_expected;
   uint32_t cmd_start_time;
-} Server;
+} CpuServer;
 
 bool cmd_version(void);
 bool cmd_reset(void);
@@ -267,5 +339,6 @@ bool cmd_read_address(void);
 bool cmd_cpu_type(void);
 bool cmd_invalid(void);
 bool cmd_emu8080(void);
+bool cmd_prefetch(void);
 
 #endif

@@ -22,7 +22,7 @@ fn test_das() {
         of: false,
     }; 512];
 
-    let cpu_client = match CpuClient::init() {
+    let cpu_client = match CpuClient::init(None) {
         Ok(ard_client) => {
             println!("Opened connection to Arduino_8088 server!");
             ard_client
@@ -34,7 +34,7 @@ fn test_das() {
     };
 
     // Create a remote cpu instance using the cpu_client which should now be connected.
-    let mut cpu = RemoteCpu::new(CpuType::Intel8088, cpu_client, false, false, 0, 0, 0, 0);
+    let mut cpu = RemoteCpu::new(cpu_client, false, false, 0, 0, 0, 0);
 
     let cf = true;
 

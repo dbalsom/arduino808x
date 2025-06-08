@@ -1,8 +1,31 @@
+/*
+    ArduinoX86 Copyright 2022-2025 Daniel Balsom
+    https://github.com/dbalsom/arduinoX86
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
+
+use crate::code_stream::CodeStream;
 use crate::opcodes::OPCODE_NOP;
 use crate::queue::QueueDataType;
-use crate::code_stream::CodeStream;
 use ard808x_client::CpuWidth;
 
 pub struct RemoteProgram {
@@ -39,13 +62,18 @@ impl RemoteProgram {
     }
 
     // Read the program into a CodeStream.
-    pub fn read_program(&mut self, a0: bool, stream: &mut CodeStream, data_type: QueueDataType ) -> usize {
+    pub fn read_program(
+        &mut self,
+        a0: bool,
+        stream: &mut CodeStream,
+        data_type: QueueDataType,
+    ) -> usize {
         match self.width {
             CpuWidth::Eight => {
                 let mut buf = [0u8; 1];
                 if let Ok(_) = self.bytes.read_exact(&mut buf) {
                     stream.push_byte(buf[0], data_type);
-                }            
+                }
                 1
             }
             CpuWidth::Sixteen => {
@@ -58,18 +86,17 @@ impl RemoteProgram {
                             // There were two bytes left, push the word.
                             stream.push_word(u16::from_le_bytes(buf), data_type);
                             2
-                        },
+                        }
                         Err(_) => {
                             // Fewer than two bytes remaining...
                             if self.program_remaining() == 1 {
-                                // Only one byte left, read it. 
+                                // Only one byte left, read it.
                                 if let Ok(_) = self.bytes.read_exact(&mut buf[..1]) {
                                     stream.push_byte(buf[0], data_type);
                                     1
-                                }    
-                                else {
+                                } else {
                                     0
-                                }                    
+                                }
                             } else {
                                 // No bytes left!
                                 log::trace!("read_program(): no more bytes!");
@@ -77,33 +104,29 @@ impl RemoteProgram {
                             }
                         }
                     }
-                }
-                else {
+                } else {
                     // Odd address... provide a dummy byte if at start of program
                     // We must have at least 1 byte in the program to do this
                     if self.program_remaining() == 1 {
                         if self.bytes.position() == 0 {
                             stream.push_byte(OPCODE_NOP, QueueDataType::Fill);
-                        }
-                        else {
+                        } else {
                             // Seek backwards 1
                             _ = self.bytes.seek(SeekFrom::Current(-1));
                             let mut buf = [0u8; 1];
                             if let Ok(_) = self.bytes.read_exact(&mut buf) {
                                 stream.push_byte(buf[0], data_type);
-                            }                               
+                            }
                         }
                         // Read the second byte
                         let mut buf = [0u8; 1];
                         if let Ok(_) = self.bytes.read_exact(&mut buf) {
                             stream.push_byte(buf[0], data_type);
                             1
-                        }
-                        else {
+                        } else {
                             0
                         }
-                    }
-                    else {
+                    } else {
                         // No bytes left!
                         log::trace!("read_program(): no more bytes!");
                         0
@@ -116,7 +139,11 @@ impl RemoteProgram {
     /// Get the fill count - this will either be 0 or 1. This can be used to instruct
     /// the CPU server to adjust IP in the store program
     pub fn get_fill_ct(&self) -> usize {
-        if self.used_fill { 1 } else { 0 }
+        if self.used_fill {
+            1
+        } else {
+            0
+        }
     }
 
     /// Rewinds the program to the start.
@@ -129,7 +156,4 @@ impl RemoteProgram {
     pub fn len(&self) -> usize {
         self.bytes.get_ref().len()
     }
-
-    
-
 }

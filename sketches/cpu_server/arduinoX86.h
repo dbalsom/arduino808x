@@ -1,6 +1,6 @@
 /*
-    Arduino8088 Copyright 2022-2025 Daniel Balsom
-    https://github.com/dbalsom/arduino_8088
+    ArduinoX86 Copyright 2022-2025 Daniel Balsom
+    https://github.com/dbalsom/arduinoX86
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the “Software”),
@@ -20,40 +20,69 @@
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
 */
-#ifndef _ARDUINO8088_H
-#define _ARDUINO8088_H
+#ifndef _ARDUINO_X86_H
+#define _ARDUINO_X86_H
 
+#include "cpu_server.h"
 #include "gpio_pins.h"
+#include "ansi_color.h"
 
-// Set this to 1 to use i8288 emulation
-#define EMULATE_8288 1
+// Nothing in here should need modification. User parameters can be set in cpu_server.h
 
-// Define the board type in use.
-#define ELEGOO_MEGA 1
-#define ARDUINO_MEGA 2
-#define ARDUINO_DUE 3
-#define BOARD_TYPE ARDUINO_DUE
+#if CPU_186
+  // 186 CPU
+  // How many cycles to assert the RESET pin.
+  #define RESET_HOLD_CYCLE_COUNT 30
+  // How many cycles it takes to reset the CPU after RESET signal de-asserts. First ALE should occur after this many cycles.
+  #define RESET_CYCLE_COUNT 35
+  // If we didn't see an ALE after this many cycles, give up
+  #define RESET_CYCLE_TIMEOUT 45
+  // What logic level RESET is when asserted
+  #define RESET_ASSERT 0
+  // What logic level RESET is when deasserted
+  #define RESET_DEASSERT 1
+  // The 186 doesn't need an 8288. We can synthesize 8288 outputs using the CPU's own RD & WR & S2 signals.
+  // Leave this value at 0 when using a 186.
+  #define EMULATE_8288 0
+  // If you are using a newer 186 like an 80L186EB it won't have queue status lines.
+  // Set this to 0 in that case to use alternate logic.
+  #define HAVE_QUEUE_STATUS 0
+#else
+  // Non-186 CPU
+  // How many cycles to hold the RESET signal high. Intel says "greater than 4" although 4 seems to work.
+  #define RESET_HOLD_CYCLE_COUNT 5
+  // How many cycles it takes to reset the CPU after RESET signal goes low. First ALE should occur after this many cycles.
+  #define RESET_CYCLE_COUNT 7
+  // If we didn't see an ALE after this many cycles, give up
+  #define RESET_CYCLE_TIMEOUT 14
+  // What logic level RESET is when asserted
+  #define RESET_ASSERT 1
+  // What logic level RESET is when deasserted
+  #define RESET_DEASSERT 0
+  // Set this to 1 to use i8288 emulation
+  #define EMULATE_8288 1
+  // Leave this at 1 for non-186 CPUs as they will always have the queue status lines.
+  #define HAVE_QUEUE_STATUS 1
+#endif
+
+// Define board type 
+#define ARDUINO_MEGA 1
+#define ARDUINO_DUE 2
+#define ARDUINO_GIGA 3
 
 #if defined(__SAM3X8E__) // If Arduino DUE
-
+  #define BOARD_TYPE ARDUINO_DUE
   #define SERIAL SerialUSB
   #define FLUSH SERIAL.flush()
 #elif defined(__AVR_ATmega2560__) // If Arduino MEGA
-
+  #define BOARD_TYPE ARDUINO_MEGA
   #define SERIAL Serial
   #define FLUSH 
-#elif defined(ARDUINO_GIGA)
-
+#elif defined(ARDUINO_GIGA) // If Arduino GIGA
+  #define BOARD_TYPE ARDUINO_GIGA
   #define SERIAL SerialUSB
   #define FLUSH 
 #endif
-
-// Determines whether to jump to the specified load segment before executing the load program,
-// or just let the address lines roll over.
-// Enables the JumpVector state.
-// If disabled, user programs shouldn't use the first few k of memory. 
-// >>> Disabling this is unsupported <<<
-#define USE_LOAD_SEG 1
 
 // Code segment to use for load program. User programs shouldn't jump here.
 const uint16_t LOAD_SEG = 0xD000;
@@ -98,50 +127,6 @@ const char *CPU_TYPE_STRINGS[] = {
 
 const char CPU_TYPE_COUNT = sizeof(CPU_TYPE_STRINGS) / sizeof(CPU_TYPE_STRINGS[0]);
 
-// States for main program state machine:
-// ----------------------------------------------------------------------------
-// Reset - CPU is being reset
-// JumpVector - CPU is jumping from reset vector to load segment (optional?)
-// Load - CPU is executing register Load program
-// LoadDone - CPU has finished executing Load program and waiting for program execution to start
-// Execute - CPU is executing user program
-// Store - CPU has is executing register Store program
-typedef enum {
-  Reset = 0,
-  CpuId,
-  JumpVector,
-  Load,
-  LoadDone,
-  EmuEnter,
-  Execute,
-  ExecuteFinalize,
-  ExecuteDone,
-  EmuExit,
-  Store,
-  StoreDone,
-  Done
-} machine_state_t;
-
-const char MACHINE_STATE_CHARS[] = {
-  'R', 'I', 'J', 'L', 'M', '8', 'E', 'F', 'X', '9', 'S', 'T', 'D'
-};
-
-const char* MACHINE_STATE_STRINGS[] = {
-  "Reset",
-  "CpuId",
-  "JumpVector",
-  "Load",
-  "LoadDone",
-  "EmuEnter",
-  "Execute",
-  "ExecuteFinalize",
-  "ExecuteDone",
-  "EmuExit",
-  "Store",
-  "StoreDone",
-  "Done"
-};
-
 // Bus transfer states, as determined by status lines S0-S2.
 typedef enum {
   IRQA = 0,   // IRQ Acknowledge
@@ -166,6 +151,17 @@ const char *BUS_STATE_STRINGS[] = {
   "PASV"
 };
 
+const char *BUS_STATE_COLORS[] = {
+  ansi::bright_red,     // IRQA 
+  ansi::yellow,         // IOR  
+  ansi::bright_yellow,  // IOW  
+  ansi::bright_magenta, // HALT 
+  ansi::cyan,           // CODE 
+  ansi::bright_blue,    // MEMR 
+  ansi::bright_green,   // MEMW 
+  ansi::white           // PASV 
+};
+
 // Bus transfer cycles. Tw is wait state, inserted if READY is not asserted during T3.
 typedef enum { 
   T1 = 0,
@@ -174,7 +170,7 @@ typedef enum {
   T4 = 3,
   TW = 4,
   TI = 5,
-} t_cycle;
+} t_cycle_t;
 
 
 // Strings for printing bus transfer cycles.
@@ -252,6 +248,7 @@ typedef struct cpu {
   cpu_width_t width; // Native bus width of the CPU. Detected on reset from BHE line.
   bool do_emulation; // Flag that determines if we enter 8080 emulation mode after Load
   bool in_emulation; // Flag set when we have entered 8080 emulation mode and cleared when we have left
+  bool do_prefetch; // Flag that determines if we enter Prefetch state and execute a prefetch program.
   uint32_t cpuid_counter; // Cpuid cycle counter. Used to time to identify the CPU type.
   uint32_t cpuid_queue_reads; // Number of queue reads since reset of Cpuid cycle counter.
   machine_state_t v_state;
@@ -260,9 +257,10 @@ typedef struct cpu {
   uint32_t address_latch;
   s_state bus_state_latched; // Bus state latched on T1 and valid for entire bus cycle (immediate bus state goes PASV on T3)
   s_state bus_state; // Bus state is current status of S0-S2 at given cycle (may not be valid)
-  t_cycle bus_cycle;
+  t_cycle_t bus_cycle;
   data_width_t data_width; // Current size of data bus. Detected during bus transfer from BHE line.
   uint16_t data_bus;
+  bool data_bus_resolved; // Whether we have resolved the data bus this m-cycle or not.
   bool prefetching_store;
   uint8_t reads_during_prefetching_store;
   uint8_t data_type;
@@ -278,6 +276,7 @@ typedef struct cpu {
   registers_t load_regs; // Register state set by Load command
   registers_t post_regs; // Register state retrieved from Store program
   uint8_t *readback_p;
+  bool have_queue_status; // Whether we have access to the queue status lines. Can be detected during RESET.
   Queue queue; // Instruction queue
   uint8_t opcode; // Currently executing opcode
   const char *mnemonic; // Decoded mnemonic
@@ -291,7 +290,7 @@ typedef struct i8288 {
   s_state last_status; // S0-S2 of previous cycle
   s_state status; // S0-S2 of current cycle
   s_state status_latch;
-  t_cycle tcycle;
+  t_cycle_t tcycle;
   bool ale;
   bool mrdc;
   bool amwc;
@@ -301,13 +300,6 @@ typedef struct i8288 {
   bool iowc;
   bool inta;
 } Intel8288;
-
-// How many cycles to hold the RESET signal high. Intel says "greater than 4" although 4 seems to work.
-const int RESET_HOLD_CYCLE_COUNT = 5; 
-// How many cycles it takes to reset the CPU after RESET signal goes low. First ALE should occur after this many cycles.
-const int RESET_CYCLE_COUNT = 7; 
-// If we didn't see an ALE after this many cycles, give up
-const int RESET_CYCLE_TIMEOUT = 14; 
 
 // ----------------------------- CPU FLAGS ----------------------------------//
 const uint16_t CPU_FLAG_CARRY      = 0b0000000000000001;
@@ -337,7 +329,7 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 #elif defined(__SAM3X8E__) // If Arduino DUE
 
   #define CLOCK_PIN_HIGH_DELAY 1
-  #define CLOCK_PIN_LOW_DELAY 0
+  #define CLOCK_PIN_LOW_DELAY 1
 
 #elif defined(ARDUINO_GIGA) 
 
@@ -393,6 +385,15 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 // -------------------------- CPU Input pins ----------------------------------
 #define BHE_PIN 17
 #define READ_BHE_PIN READ_PIN_D17
+#define READ_READY_PIN READ_PIN_D06
+#define READ_S0_PIN READ_PIN_D14
+#define READ_S1_PIN READ_PIN_D15
+#define READ_S2_PIN READ_PIN_D16
+#define READ_S3_PIN READ_PIN_D38
+#define READ_S4_PIN READ_PIN_D39
+#define READ_S5_PIN READ_PIN_D40
+#define READ_QS0_PIN READ_PIN_D09
+#define READ_QS1_PIN READ_PIN_D08
 
 #define READY_PIN 6
 #define TEST_PIN 7
@@ -514,95 +515,113 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
   #define WRITE_CEN_PIN(x) ((x) ? (PIOA->PIO_SODR = BIT24) : (PIOA->PIO_CODR = BIT24))
 
 #elif defined(__AVR_ATmega2560__) // If Arduino MEGA
-
-  #define WRITE_CLK(x)    ((x) ? (PORTG |= (1 << 5)) : (PORTG &= ~(1 << 5))) // CLK is PG5
-  #define WRITE_RESET(x)  ((x) ? (PORTE |= (1 << 3)) : (PORTE &= ~(1 << 3))) // RESET is PE3
+  // D4
+  #define WRITE_CLK(x) ((x) ? (PORTG |= (1 << 5)) : (PORTG &= ~(1 << 5))) // CLK is PG5
+  // D5
+  #define WRITE_RESET(x) ((x) ? (PORTE |= (1 << 3)) : (PORTE &= ~(1 << 3))) // RESET is PE3
+  // D6
   #define WRITE_READY_PIN(x) ((x) ? (PORTH |= (1 << 3)) : (PORTH &= ~(1 << 3)))
+  // D7
   #define WRITE_TEST_PIN(x) ((x) ? (PORTH |= (1 << 4)) : (PORTH &= ~(1 << 4)))
+  // D10
   #define WRITE_LOCK_PIN(x) ((x) ? (PORTB |= (1 << 4)) : (PORTB &= ~(1 << 4)))
+  // D12
   #define WRITE_INTR_PIN(x) ((x) ? (PORTB |= (1 << 6)) : (PORTB &= ~(1 << 6)))
+  // D13
   #define WRITE_NMI_PIN(x) ((x) ? (PORTB |= (1 << 7)) : (PORTB &= ~(1 << 7)))
-
+  // A0
   #define WRITE_AEN_PIN(x) ((x) ? (PORTF |= 0x01) : (PORTF &= ~0x01))
+  // A1
   #define WRITE_CEN_PIN(x) ((x) ? (PORTF |= (1 << 1)) : (PORTF &= ~(1 << 1)))
 
 #elif defined (ARDUINO_GIGA)
 
-  // D4: PC26* (some references say PA29 - didn't work)
-  #define WRITE_CLK(x) ((x) ? (PIOC->PIO_SODR = BIT26) : (PIOC->PIO_CODR = BIT26))
-  // D5: PC25
-  #define WRITE_RESET(x) ((x) ? (PIOC->PIO_SODR = PIO_PC25) : (PIOC->PIO_CODR = PIO_PC25))
-  // D6: PC24
-  #define WRITE_READY_PIN(x) ((x) ? (PIOC->PIO_SODR = BIT24) : (PIOC->PIO_CODR = BIT24))
-  // D7: PC23
-  #define WRITE_TEST_PIN(x) ((x) ? (PIOC->PIO_SODR = BIT23) : (PIOC->PIO_CODR = BIT23))
-  // D10: PC29*
-  #define WRITE_LOCK_PIN(x) ((x) ? (PIOC->PIO_SODR = BIT29) : (PIOC->PIO_CODR = BIT29))
-  // D12: PD8
-  #define WRITE_INTR_PIN(x) ((x) ? (PIOD->PIO_SODR = BIT08) : (PIOD->PIO_CODR = BIT08))
-  // D13: PB27
-  #define WRITE_NMI_PIN(x) ((x) ? (PIOB->PIO_SODR = BIT27) : (PIOB->PIO_CODR = BIT27))
-  // A0: PA16
-  #define WRITE_AEN_PIN(x) ((x) ? (PIOA->PIO_SODR = BIT16) : (PIOA->PIO_CODR = BIT16))
-  // A1: PA24
-  #define WRITE_CEN_PIN(x) ((x) ? (PIOA->PIO_SODR = BIT24) : (PIOA->PIO_CODR = BIT24))
+  // D4: PJ8
+  #define WRITE_CLK(x) WRITE_PIN_D04(x)
+  // D5: PA7
+  #define WRITE_RESET(x) WRITE_PIN_D04(x)
+  // D6: PD13
+  #define WRITE_READY_PIN(x) WRITE_PIN_D06(x)
+  // D7: PB4
+  #define WRITE_TEST_PIN(x) WRITE_PIN_D07(x)
+  // D10: PK1
+  #define WRITE_LOCK_PIN(x) WRITE_PIN_D10(x)
+  // D12: PJ11
+  #define WRITE_INTR_PIN(x) WRITE_PIN_D12(x)
+  // D13: PH6
+  #define WRITE_NMI_PIN(x) WRITE_PIN_D13(x)
+  // A0: PC4
+  #define WRITE_AEN_PIN(x) WRITE_PIN_A0(x)
+  // A1: PC5
+  #define WRITE_CEN_PIN(x) WRITE_PIN_A1(x)
 
 #endif 
 
 // Read macros
 
 #if defined(__SAM3X8E__) // If Arduino DUE
-  #define READ_LOCK_PIN      ((PIOC->PIO_PDSR & BIT29) != 0)
+  #define READ_LOCK_PIN READ_PIN_D10
 #elif defined(__AVR_ATmega2560__) // If Arduino MEGA
   #define READ_LOCK_PIN 0
 #elif defined(ARDUINO_GIGA)
-  #define READ_LOCK_PIN 0
+  #define READ_LOCK_PIN READ_PIN_D10
 #endif
 
 
 #if EMULATE_8288
   // D50: PC13
-  #define READ_ALE_PIN       (I8288.ale)
+  #if CPU_186
+    // The 186 has its own ALE pin, so we will defer to that
+    #define READ_ALE_PIN  READ_PIN_D50
+  #else
+    #define READ_ALE_PIN  (I8288.ale)
+  #endif
   // D51: PC12
-  #define READ_MRDC_PIN      (!I8288.mrdc)
+  #define READ_MRDC_PIN   (!I8288.mrdc)
   // D52: PB21
-  #define READ_AMWC_PIN      (!I8288.amwc)
+  #define READ_AMWC_PIN   (!I8288.amwc)
   // D53: PB14
-  #define READ_MWTC_PIN      (!I8288.mwtc)
+  #define READ_MWTC_PIN   (!I8288.mwtc)
   // D46: PC17
-  #define READ_IORC_PIN      (!I8288.iorc)
+  #define READ_IORC_PIN   (!I8288.iorc)
   // D48: PC15
-  #define READ_AIOWC_PIN     (!I8288.aiowc)
+  #define READ_AIOWC_PIN  (!I8288.aiowc)
   // D47: PC16
-  #define READ_IOWC_PIN      (!I8288.iowc)
+  #define READ_IOWC_PIN   (!I8288.iowc)
   // D45: PC18
-  #define READ_INTA_PIN      (!I8288.inta)
+  #define READ_INTA_PIN   (!I8288.inta)
 #else
   #if defined(__SAM3X8E__) // If Arduino DUE
+    
+    #if CPU_186
+      // The L186 doesn't use an 8288 and can produce its own bus signals, but they need to be 
+      // decoded 
+      #define READ_ALE_PIN      READ_PIN_D50
+      #define READ_MRDC_PIN     !(!READ_PIN_D51 && READ_PIN_D16)    // We hook !RD up to D51. Mem read when S2 (D16) is high.
+      #define READ_AMWC_PIN     1                                   // There is no AMWC signal. Simulate inactive-high.
+      #define READ_MWTC_PIN     !(!READ_PIN_D53 && READ_PIN_D16)    // We hook !WR up to D53. Mem write when S2 (D16) is high.
+      #define READ_IORC_PIN     !(!READ_PIN_D51 && !READ_PIN_D16)   // We hook !RD up to D51. IO read when S2 (D16) is low.
+      #define READ_AIOWC_PIN    1                                   // There is no AIOWC signal. Simulate inactive-high.
+      #define READ_IOWC_PIN     !(!READ_PIN_D53 && !READ_PIN_D16)   // We hook !WR up to D53. IO write when S2 (D16) is low.
+      #define READ_INTA_PIN     READ_PIN_D45
+    #else
+      #define READ_AEN_PIN      ((PIOD->PIO_PDSR & BIT10) != 0)
+      #define READ_CEN_PIN      ((PIOD->PIO_PDSR & BIT09) != 0)
 
-    #define READ_AEN_PIN       ((PIOD->PIO_PDSR & BIT10) != 0)
-    #define READ_CEN_PIN       ((PIOD->PIO_PDSR & BIT09) != 0)
+      // D50: PC13
+      #define READ_ALE_PIN      READ_PIN_D50
+      #define READ_DTR_PIN      ((PIOC->PIO_PDSR & BIT03) != 0)
+      #define READ_MCEPDEN_PIN  ((PIOC->PIO_PDSR & BIT01) != 0)
+      #define READ_DEN_PIN      ((PIOC->PIO_PDSR & BIT02) != 0)
 
-    // D50: PC13
-    #define READ_ALE_PIN       ((PIOC->PIO_PDSR & BIT13) != 0)
-    #define READ_DTR_PIN       ((PIOC->PIO_PDSR & BIT03) != 0)
-    #define READ_MCEPDEN_PIN   ((PIOC->PIO_PDSR & BIT01) != 0)
-    #define READ_DEN_PIN       ((PIOC->PIO_PDSR & BIT02) != 0)
-
-    // D51: PC12
-    #define READ_MRDC_PIN      ((PIOC->PIO_PDSR & BIT12) != 0)
-    // D52: PB21
-    #define READ_AMWC_PIN      ((PIOB->PIO_PDSR & BIT21) != 0)
-    // D53: PB14
-    #define READ_MWTC_PIN      ((PIOB->PIO_PDSR & BIT14) != 0)
-    // D46: PC17
-    #define READ_IORC_PIN      ((PIOC->PIO_PDSR & BIT17) != 0)
-    // D48: PC15
-    #define READ_AIOWC_PIN     ((PIOC->PIO_PDSR & BIT15) != 0)
-    // D47: PC16
-    #define READ_IOWC_PIN      ((PIOC->PIO_PDSR & BIT16) != 0)
-    // D45: PC18
-    #define READ_INTA_PIN      ((PIOC->PIO_PDSR & BIT18) != 0)
+      #define READ_MRDC_PIN     READ_PIN_D51
+      #define READ_AMWC_PIN     READ_PIN_D52
+      #define READ_MWTC_PIN     READ_PIN_D53
+      #define READ_IORC_PIN     READ_PIN_D46
+      #define READ_AIOWC_PIN    READ_PIN_D48
+      #define READ_IOWC_PIN     READ_PIN_D47
+      #define READ_INTA_PIN     READ_PIN_D45
+    #endif
 
   #elif defined(__AVR_ATmega2560__) // If Arduino MEGA
 
@@ -649,7 +668,7 @@ const int OUTPUT_PINS[] = {
 
 // All input pins, used to set pin direction on setup
 const int INPUT_PINS[] = {
-  3,8,9,10,11,14,15,16,
+  3,8,9,10,11,14,15,16,17,
   22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,
   43,44,45,46,47,48,49,50,51,52,53
 };
@@ -694,4 +713,32 @@ void empty_queue();
 void print_queue();
 void read_queue();
 
-#endif 
+// i8288.ino
+void tick_i8288();
+void reset_i8288();
+
+// piq.ino
+void init_queue();
+void push_queue(uint16_t data, uint8_t dtype, data_width_t width);
+bool pop_queue(uint8_t *byte, uint8_t *dtype);
+bool queue_has_room(data_width_t width);
+void empty_queue();
+void print_queue();
+uint8_t read_queue(size_t idx);
+const char *queue_to_string();
+
+// bus.ino
+void data_bus_write(uint16_t data, data_width_t width);
+uint16_t data_bus_read(data_width_t width);
+uint16_t data_bus_peek(cpu_width_t width);
+void read_address();
+uint32_t peek_address();
+void latch_address();
+bool a0();
+uint32_t read_address_pins(bool peek);
+
+// buzzer.ino
+void beep(uint32_t time);
+void error_beep();
+
+#endif // _ARDUINO_X86_H

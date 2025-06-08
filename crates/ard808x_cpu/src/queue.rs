@@ -1,20 +1,42 @@
+/*
+    ArduinoX86 Copyright 2022-2025 Daniel Balsom
+    https://github.com/dbalsom/arduinoX86
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
 use ard808x_client::{CpuWidth, DataWidth};
 
-#[derive (Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum QueueDataType {
     Preload,
     EmuEnter,
     Program,
-    EmuExit,
     Finalize,
     Fill,
 }
 
-#[derive (Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct QueueEntry {
     opcode: u8,
     dtype: QueueDataType,
-    addr: u32
+    addr: u32,
 }
 
 pub struct InstructionQueue {
@@ -39,7 +61,8 @@ impl InstructionQueue {
                     opcode: 0,
                     dtype: QueueDataType::Program,
                     addr: 0,
-                }; width.queue_size()
+                };
+                width.queue_size()
             ],
         }
     }
@@ -63,7 +86,7 @@ impl InstructionQueue {
                     self.q[self.front] = QueueEntry {
                         opcode: (data >> 8) as u8,
                         dtype,
-                        addr
+                        addr,
                     };
                     self.front = (self.front + 1) % self.size;
                     self.len += 1;
@@ -72,13 +95,13 @@ impl InstructionQueue {
                     self.q[self.front] = QueueEntry {
                         opcode: data as u8,
                         dtype,
-                        addr
+                        addr,
                     };
                     self.front = (self.front + 1) % self.size;
                     self.q[self.front] = QueueEntry {
                         opcode: (data >> 8) as u8,
                         dtype,
-                        addr
+                        addr,
                     };
                     self.front = (self.front + 1) % self.size;
                     self.len += 2;
@@ -87,8 +110,7 @@ impl InstructionQueue {
                     log::error!("Bad DataWidth for queue push: {:?}", width);
                 }
             }
-        }
-        else {
+        } else {
             //panic!("Queue overrun!");
             log::error!("Queue overrun!");
         }
@@ -102,9 +124,8 @@ impl InstructionQueue {
             self.back = (self.back + 1) % self.size;
             self.len -= 1;
 
-            return (q_entry.opcode, q_entry.dtype, q_entry.addr)
+            return (q_entry.opcode, q_entry.dtype, q_entry.addr);
         }
-
         panic!("Queue underrun!");
     }
 
@@ -115,14 +136,14 @@ impl InstructionQueue {
     }
 
     pub fn to_string(&self) -> String {
-
         let mut base_str = "".to_string();
 
         for i in 0..self.len {
-            base_str.push_str(&format!("{:02X}", self.q[(self.back + i) % self.size].opcode));
+            base_str.push_str(&format!(
+                "{:02X}",
+                self.q[(self.back + i) % self.size].opcode
+            ));
         }
         base_str
     }
-
-
 }

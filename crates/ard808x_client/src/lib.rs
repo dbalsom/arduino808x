@@ -15,8 +15,8 @@ pub enum ServerCpuType {
     Intel8086,
     NecV20,
     NecV30,
-    Intel80188,
-    Intel80186,
+    Intel80188(bool),
+    Intel80186(bool),
 }
 
 impl ServerCpuType {
@@ -25,8 +25,8 @@ impl ServerCpuType {
         match self {
             ServerCpuType::Intel8088
             | ServerCpuType::Intel8086
-            | ServerCpuType::Intel80188
-            | ServerCpuType::Intel80186 => true,
+            | ServerCpuType::Intel80188(_)
+            | ServerCpuType::Intel80186(_) => true,
             _ => false,
         }
     }
@@ -49,7 +49,7 @@ impl ServerCpuType {
 impl From<ServerCpuType> for CpuWidth {
     fn from(cpu_type: ServerCpuType) -> Self {
         match cpu_type {
-            ServerCpuType::Intel8088 | ServerCpuType::Intel80188 => CpuWidth::Eight,
+            ServerCpuType::Intel8088 | ServerCpuType::Intel80188(_) => CpuWidth::Eight,
             _ => CpuWidth::Sixteen,
         }
     }
@@ -59,13 +59,13 @@ impl From<ServerCpuType> for CpuWidth {
 impl TryFrom<u8> for ServerCpuType {
     type Error = CpuClientError;
     fn try_from(value: u8) -> Result<ServerCpuType, CpuClientError> {
-        match value {
+        match value & 0x7F {
             0x00 => Ok(ServerCpuType::Intel8088),
             0x01 => Ok(ServerCpuType::Intel8086),
             0x02 => Ok(ServerCpuType::NecV20),
             0x03 => Ok(ServerCpuType::NecV30),
-            0x04 => Ok(ServerCpuType::Intel80188),
-            0x05 => Ok(ServerCpuType::Intel80186),
+            0x04 => Ok(ServerCpuType::Intel80188((value & 0x80) != 0)),
+            0x05 => Ok(ServerCpuType::Intel80186((value & 0x80) != 0)),
             _ => Err(CpuClientError::BadValue),
         }
     }
@@ -176,6 +176,7 @@ pub enum ServerCommand {
     CmdReadAddressU = 0x17,
     CmdCpuType = 0x18,
     CmdEmulate8080 = 0x19,
+    CmdPrefetch = 0x1A,
     CmdInvalid,
 }
 
@@ -184,10 +185,12 @@ pub enum ServerCommand {
 pub enum ProgramState {
     Reset = 0,
     CpuId,
+    CpuSetup,
     JumpVector,
     Load,
     LoadDone,
     EmuEnter,
+    Prefetch,
     Execute,
     ExecuteFinalize,
     ExecuteDone,
@@ -208,13 +211,14 @@ impl TryFrom<u8> for ProgramState {
             0x03 => Ok(ProgramState::Load),
             0x04 => Ok(ProgramState::LoadDone),
             0x05 => Ok(ProgramState::EmuEnter),
-            0x06 => Ok(ProgramState::Execute),
-            0x07 => Ok(ProgramState::ExecuteFinalize),
-            0x08 => Ok(ProgramState::ExecuteDone),
-            0x09 => Ok(ProgramState::EmuExit),
-            0x0A => Ok(ProgramState::Store),
-            0x0B => Ok(ProgramState::StoreDone),
-            0x0C => Ok(ProgramState::Done),
+            0x06 => Ok(ProgramState::Prefetch),
+            0x07 => Ok(ProgramState::Execute),
+            0x08 => Ok(ProgramState::ExecuteFinalize),
+            0x09 => Ok(ProgramState::ExecuteDone),
+            0x0A => Ok(ProgramState::EmuExit),
+            0x0B => Ok(ProgramState::Store),
+            0x0C => Ok(ProgramState::StoreDone),
+            0x0D => Ok(ProgramState::Done),
             _ => Err(CpuClientError::BadValue),
         }
     }

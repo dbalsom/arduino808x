@@ -4,7 +4,7 @@ use ard808x_cpu::*;
 #[test]
 fn test_flag_init() {
     // Create a cpu_client connection to cpu_server.
-    let cpu_client = match CpuClient::init() {
+    let cpu_client = match CpuClient::init(None) {
         Ok(ard_client) => {
             println!("Opened connection to Arduino_8088 server!");
             ard_client
@@ -16,7 +16,7 @@ fn test_flag_init() {
     };
 
     // Create a remote cpu instance using the cpu_client which should now be connected.
-    let mut cpu = RemoteCpu::new(CpuType::Intel8088, cpu_client, false, false, 0, 0, 0, 0);
+    let mut cpu = RemoteCpu::new(cpu_client, false, false, 0, 0, 0, 0);
 
     let regs = RemoteCpuRegisters {
         ax: 0,

@@ -1,3 +1,26 @@
+/*
+    ArduinoX86 Copyright 2022-2025 Daniel Balsom
+    https://github.com/dbalsom/arduinoX86
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the “Software”),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
 #![allow(dead_code, unused_variables)]
 
 mod queue;
@@ -282,6 +305,7 @@ pub struct RemoteCpu<'a> {
 
     nready_states: u32,
 
+    have_queue_status: bool,
     queue: InstructionQueue,
     queue_byte: u8,
     queue_type: QueueDataType,
@@ -330,6 +354,17 @@ impl RemoteCpu<'_> {
         };
 
         log::debug!("Detected CPU type: {:?}", server_cpu_type);
+
+        let have_queue_status = match server_cpu_type {
+            ServerCpuType::Intel8088 | ServerCpuType::Intel8086 => true,
+            ServerCpuType::NecV20 | ServerCpuType::NecV30 => true,
+            ServerCpuType::Intel80188(status) => status,
+            ServerCpuType::Intel80186(status) => status,
+        };
+
+        if !have_queue_status {
+            log::warn!("Detected CPU does not provide queue status!");
+        }
 
         if do_emu8080 {
             if !server_cpu_type.has_8080_emulation() {
@@ -425,6 +460,8 @@ impl RemoteCpu<'_> {
             mcycle_state: BusState::PASV,
             bus_cycle: BusCycle::T1,
             nready_states: 0,
+
+            have_queue_status,
             queue: InstructionQueue::new(width),
             queue_byte: 0,
             queue_type: QueueDataType::Program,
@@ -873,8 +910,8 @@ impl RemoteCpu<'_> {
                                 );
                             } else {
                                 log::trace!(
-                                    "Preload: out of instruction bounds data pushed to queue: {}",
-                                    self.data_bus_str()
+                                    "Preload: out of instruction bounds data pushed to queue: {} @ [{:05X}]",
+                                    self.data_bus_str(), self.address_latch
                                 );
                                 // We are in preloading state, but have exhausted preload program. Mark the next byte to be put
                                 // in queue to signal start of main program.
@@ -999,34 +1036,7 @@ impl RemoteCpu<'_> {
                                 log::trace!("Out of program bounds!");
                                 // Prefetching out of bounds. This terminates execution; so we should start
                                 // feeding the CPU server the store program.
-                                match self.run_state {
-                                    // RunState::Program => {
-                                    //     self.data_bus = if self.cpu_type.enter_emulation() {
-                                    //         if let Some(exit_pgrm) = &mut self.emu_exit_pgm {
-                                    //             if let Some(word) = exit_pgrm.read_program(None) {
-                                    //                 log::trace!("Writing [EmuExit] program: [{}]", word);
-                                    //                 word.data_bus_value()
-                                    //             }
-                                    //             else {
-                                    //                 OPCODE_NOPS
-                                    //             }
-                                    //         }
-                                    //         else {
-                                    //             log::trace!("Writing NOP to data bus (?)");
-                                    //             OPCODE_NOPS
-                                    //         }
-                                    //     }
-                                    //     else {
-                                    //         OPCODE_NOPS
-                                    //     }
-                                    // }
-                                    RunState::Finalize => {
-                                        write_store = true;
-                                    }
-                                    _ => {
-                                        write_store = true;
-                                    }
-                                };
+                                write_store = true;
                             }
                         }
                     }
@@ -1090,69 +1100,71 @@ impl RemoteCpu<'_> {
         }
 
         // Handle queue activity
-        let q_op = get_queue_op!(self.status);
+        if self.have_queue_status {
+            let q_op = get_queue_op!(self.status);
 
-        match q_op {
-            QueueOp::First | QueueOp::Subsequent => {
-                // We fetched a byte from the queue last cycle
-                (self.queue_byte, self.queue_type, self.queue_fetch_addr) = self.queue.pop();
-                if q_op == QueueOp::First {
-                    // First byte of instruction fetched.
-                    self.queue_first_fetch = true;
-                    self.queue_fetch_n = 0;
-                    self.opcode = self.queue_byte;
+            match q_op {
+                QueueOp::First | QueueOp::Subsequent => {
+                    // We fetched a byte from the queue last cycle
+                    (self.queue_byte, self.queue_type, self.queue_fetch_addr) = self.queue.pop();
+                    if q_op == QueueOp::First {
+                        // First byte of instruction fetched.
+                        self.queue_first_fetch = true;
+                        self.queue_fetch_n = 0;
+                        self.opcode = self.queue_byte;
 
-                    // Was NMI triggered?
-                    if self.do_nmi {
-                        cycle_comment!(self, "Setting NMI pin high...");
-                        self.client
-                            .write_pin(CpuPin::NMI, true)
-                            .expect("Failed to write NMI pin!");
-                        self.do_nmi = false;
-                    }
-
-                    // Is this opcode an NMI trigger?
-                    if self.opcode == OPCODE_NMI_TRIGGER {
-                        // set flag to enable NMI on next instruction
-                        //self.do_nmi = true;
-                    }
-
-                    // Does this opcode mark the end of a preload program?
-                    self.advance_run_state_on_queue_read();
-
-                    // Finalize execution if this queue byte was flagged as final
-                    if self.queue_type == QueueDataType::Finalize {
-                        self.finalize();
-                    }
-
-                    // Handle INTR instruction trigger
-                    if !is_group_op(self.queue_byte) {
-                        self.instruction_num += 1;
-
-                        if self.instruction_num == self.intr_after {
-                            cycle_comment!(
-                                self,
-                                "Setting INTR high after instruction #{}",
-                                self.intr_after
-                            );
-
-                            // Set INTR line high
+                        // Was NMI triggered?
+                        if self.do_nmi {
+                            cycle_comment!(self, "Setting NMI pin high...");
                             self.client
-                                .write_pin(CpuPin::INTR, true)
-                                .expect("Failed to set INTR line high.");
-                            self.intr = true;
+                                .write_pin(CpuPin::NMI, true)
+                                .expect("Failed to write NMI pin!");
+                            self.do_nmi = false;
                         }
+
+                        // Is this opcode an NMI trigger?
+                        if self.opcode == OPCODE_NMI_TRIGGER {
+                            // set flag to enable NMI on next instruction
+                            //self.do_nmi = true;
+                        }
+
+                        // Does this opcode mark the end of a preload program?
+                        self.advance_run_state_on_queue_read();
+
+                        // Finalize execution if this queue byte was flagged as final
+                        if self.queue_type == QueueDataType::Finalize {
+                            self.finalize();
+                        }
+
+                        // Handle INTR instruction trigger
+                        if !is_group_op(self.queue_byte) {
+                            self.instruction_num += 1;
+
+                            if self.instruction_num == self.intr_after {
+                                cycle_comment!(
+                                    self,
+                                    "Setting INTR high after instruction #{}",
+                                    self.intr_after
+                                );
+
+                                // Set INTR line high
+                                self.client
+                                    .write_pin(CpuPin::INTR, true)
+                                    .expect("Failed to set INTR line high.");
+                                self.intr = true;
+                            }
+                        }
+                    } else {
+                        // Subsequent byte of instruction fetched
+                        self.queue_fetch_n += 1;
                     }
-                } else {
-                    // Subsequent byte of instruction fetched
-                    self.queue_fetch_n += 1;
                 }
+                QueueOp::Flush => {
+                    // Queue was flushed last cycle
+                    self.queue.flush();
+                }
+                _ => {}
             }
-            QueueOp::Flush => {
-                // Queue was flushed last cycle
-                self.queue.flush();
-            }
-            _ => {}
         }
 
         if self.halted {
@@ -1453,7 +1465,7 @@ impl RemoteCpu<'_> {
         )
     }
 
-    /// Return whether we are inside of the preload program.
+    /// Return whether we are inside the preload program.
     pub fn have_preload_pgm(&self) -> bool {
         if let Some(program) = &self.preload_pgm {
             !program.is_finished()

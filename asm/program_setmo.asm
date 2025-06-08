@@ -4,7 +4,5 @@
 cpu	8086
 org	0h
 
-    inc sp
-    pushf
-    popf
-    hlt
+    db 0D0h
+    db 034h
