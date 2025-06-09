@@ -47,8 +47,12 @@ struct Args {
     intr_on: u32,
 
     // Raise the NMI line on the specified cycle #.
-    #[arg(long, default_value_t = 0)]
-    nmi_on: u32,
+    #[arg(long)]
+    nmi_on: Option<u32>,
+
+    // Run the CPU for a single instruction.
+    #[arg(long, default_value_t = false)]
+    single_step: bool,
 }
 
 fn main() {
@@ -92,6 +96,23 @@ fn main() {
         }
     };
 
+    if args.nmi_on.is_some() && args.single_step {
+        eprintln!("Cannot use NMI with single step mode!");
+        std::process::exit(1);
+    }
+
+    let nmi_on = if let Some(nmi_cycle) = args.nmi_on {
+        nmi_cycle
+    } else {
+        if args.single_step {
+            // If single step mode is enabled, we can use NMI on cycle 1.
+            1
+        } else {
+            // Otherwise, we don't use NMI.
+            0
+        }
+    };
+
     // Create a remote cpu instance using the cpu_client which should now be connected.
     let mut cpu = RemoteCpu::new(
         cpu_client,
@@ -100,7 +121,7 @@ fn main() {
         args.wait_states,
         args.intr_on,
         args.intr_after,
-        args.nmi_on,
+        nmi_on,
     );
 
     let cpu_type = cpu.cpu_type();

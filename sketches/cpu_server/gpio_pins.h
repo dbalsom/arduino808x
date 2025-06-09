@@ -194,7 +194,9 @@
     #define READ_PIN_D08      ((PIOC->PIO_PDSR & BIT22) != 0)
     #define READ_PIN_D09      ((PIOC->PIO_PDSR & BIT21) != 0)
     #define READ_PIN_D10      ((PIOC->PIO_PDSR & BIT29) != 0)
-
+    #define READ_PIN_D11      ((PIOD->PIO_PDSR & BIT07) != 0)
+    #define READ_PIN_D12      ((PIOD->PIO_PDSR & BIT08) != 0)
+    #define READ_PIN_D13      ((PIOB->PIO_PDSR & BIT27) != 0)
     #define READ_PIN_D14      ((PIOD->PIO_PDSR & BIT04) != 0)
     #define READ_PIN_D15      ((PIOD->PIO_PDSR & BIT05) != 0)
     #define READ_PIN_D16      ((PIOA->PIO_PDSR & BIT13) != 0)

@@ -54,6 +54,7 @@
 
 #define MODE_ASCII 0 // Use ASCII response codes (for interactive debugging only, client won't support)
 
+// What vector to use for the BRKEM call. No reason to change this really.
 #define BRKEM_VECTOR ((uint8_t)0x00)
 
 // Print a character to the debugging output on each load command.
@@ -61,15 +62,16 @@
 // Print a character to the debugging output on each store command.
 #define STORE_INDICATOR 1
 
-#define TRACE_ALL 0 // TRACE_ALL will enable all traces (TRACE_NONE overrides)
-#define TRACE_NONE 1 // TRACE_NONE will override all set traces
+#define TRACE_ALL 1 // TRACE_ALL will enable all traces (TRACE_NONE overrides)
+#define TRACE_NONE 0 // TRACE_NONE will override all set traces
 
 // These defines control tracing and debugging output for each state.
 // Note: tracing a STORE operation will likely cause it to timeout on the client.
-#define TRACE_RESET     ((1 | TRACE_ALL) & ~TRACE_NONE)
-#define TRACE_VECTOR    ((1 | TRACE_ALL) & ~TRACE_NONE)
-#define TRACE_LOAD      ((0 | TRACE_ALL) & ~TRACE_NONE)
-#define TRACE_ID        ((0 | TRACE_ALL) & ~TRACE_NONE)
+#define TRACE_RESET     ((1 | TRACE_ALL) & ~TRACE_NONE) // Print cycle traces during CPU Reset.
+#define TRACE_SETUP     ((1 | TRACE_ALL) & ~TRACE_NONE) // Print cycle traces for the CpuSetup state.
+#define TRACE_VECTOR    ((1 | TRACE_ALL) & ~TRACE_NONE) // Print cycle traces for the JumpVector state.
+#define TRACE_LOAD      ((0 | TRACE_ALL) & ~TRACE_NONE) // Print cycle traces for the Load state.
+#define TRACE_ID        ((0 | TRACE_ALL) & ~TRACE_NONE) // Print cycle traces for the CpuId state.
 #define TRACE_EMU_ENTER ((0 | TRACE_ALL) & ~TRACE_NONE)
 #define TRACE_EMU_EXIT  ((0 | TRACE_ALL) & ~TRACE_NONE)
 #define TRACE_EXECUTE   ((1 | TRACE_ALL) & ~TRACE_NONE)
@@ -81,9 +83,11 @@
 
 #define DEBUG_STATE     ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Report state changes and time spent in each state
 #define DEBUG_RESET     ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Print info about the reset process
+#define DEBUG_SETUP     ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Print info about the CPU setup routine, if applicable
 #define DEBUG_VECTOR    ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Print info about jump vector program execution
 #define DEBUG_LOAD      ((1 | DEBUG_ALL) & ~DEBUG_NONE)
 #define DEBUG_LOAD_DONE ((0 | DEBUG_ALL) & ~DEBUG_NONE)
+#define DEBUG_EXECUTE   ((1 | DEBUG_ALL) & ~DEBUG_NONE)
 #define DEBUG_STORE     ((1 | DEBUG_ALL) & ~DEBUG_NONE)
 #define DEBUG_FINALIZE  ((1 | DEBUG_ALL) & ~DEBUG_NONE)
 #define DEBUG_INSTR     ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Print instruction mnemonics as they are executed from queue
@@ -91,6 +95,8 @@
 #define DEBUG_LOCK      ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Print a message when the LOCK pin is asserted on a cycle
 #define DEBUG_QUEUE     ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Debugging output for queue operations (flushes, regular queue ops are always reported)
 #define DEBUG_TSTATE    ((0 | DEBUG_ALL) & ~DEBUG_NONE) // Info about t-state changes (mostly T3/Tw->T4)
+#define DEBUG_PIN_CMD   ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Info about pin write commands
+#define DEBUG_BUS       ((1 | DEBUG_ALL) & ~DEBUG_NONE) // Info about bus parameters (Width, etc)
 #define DEBUG_PROTO 0 // Insert debugging messages into serial output (Escaped by ##...##)
 #define DEBUG_CMD 0
 
@@ -107,10 +113,11 @@ const char RESPONSE_CHRS[] = {
 };
 
 const char VERSION_DAT[] = {
-  'a', 'r', 'd', '8', '0', '8', '8'
+  'a', 'r', 'd', 'x', '8', '6', ' '
 };
 
-const uint8_t VERSION_NUM = 2;
+// Protocol version number.
+const uint8_t VERSION_NUM = 3;
 
 // States for main program state machine:
 // ----------------------------------------------------------------------------

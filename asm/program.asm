@@ -4,7 +4,5 @@
 cpu	8086
 org	0h
 
-    inc sp
-    pushf
-    popf
+    nop
     hlt

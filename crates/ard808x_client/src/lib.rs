@@ -5,7 +5,7 @@ use std::{cell::RefCell, error::Error, fmt::Display, rc::Rc, str};
 use log;
 use serialport::{ClearBuffer, SerialPort};
 
-pub const ARD8088_BAUD: u32 = 1000000;
+pub const ARDUINO_BAUD: u32 = 1000000;
 
 /// [ServerCpuType] maps to the CPU types that can be detected by the Arduino808X server.
 #[derive(Copy, Clone, Debug, Default)]
@@ -207,18 +207,19 @@ impl TryFrom<u8> for ProgramState {
         match value {
             0x00 => Ok(ProgramState::Reset),
             0x01 => Ok(ProgramState::CpuId),
-            0x02 => Ok(ProgramState::JumpVector),
-            0x03 => Ok(ProgramState::Load),
-            0x04 => Ok(ProgramState::LoadDone),
-            0x05 => Ok(ProgramState::EmuEnter),
-            0x06 => Ok(ProgramState::Prefetch),
-            0x07 => Ok(ProgramState::Execute),
-            0x08 => Ok(ProgramState::ExecuteFinalize),
-            0x09 => Ok(ProgramState::ExecuteDone),
-            0x0A => Ok(ProgramState::EmuExit),
-            0x0B => Ok(ProgramState::Store),
-            0x0C => Ok(ProgramState::StoreDone),
-            0x0D => Ok(ProgramState::Done),
+            0x02 => Ok(ProgramState::CpuSetup),
+            0x03 => Ok(ProgramState::JumpVector),
+            0x04 => Ok(ProgramState::Load),
+            0x05 => Ok(ProgramState::LoadDone),
+            0x06 => Ok(ProgramState::EmuEnter),
+            0x07 => Ok(ProgramState::Prefetch),
+            0x08 => Ok(ProgramState::Execute),
+            0x09 => Ok(ProgramState::ExecuteFinalize),
+            0x0A => Ok(ProgramState::ExecuteDone),
+            0x0B => Ok(ProgramState::EmuExit),
+            0x0C => Ok(ProgramState::Store),
+            0x0D => Ok(ProgramState::StoreDone),
+            0x0E => Ok(ProgramState::Done),
             _ => Err(CpuClientError::BadValue),
         }
     }
@@ -264,7 +265,7 @@ pub enum CpuPin {
     NMI,
 }
 
-pub const REQUIRED_PROTOCOL_VER: u8 = 0x02;
+pub const REQUIRED_PROTOCOL_VER: u8 = 3;
 
 pub const CONTROL_ALE_BIT: u8 = 0b0000_0001;
 
@@ -372,7 +373,7 @@ impl Display for CpuClientError {
                 write!(f, "Failed to find a valid serial port.")
             }
             CpuClientError::DiscoveryError => {
-                write!(f, "Failed to find a listening Arduino8088 server.")
+                write!(f, "Failed to find a listening ArduinoX86 server.")
             }
             CpuClientError::CommandFailed => {
                 write!(f, "Server command returned failure code.")
@@ -381,7 +382,7 @@ impl Display for CpuClientError {
     }
 }
 
-/// A [CpuClient] represents a connection to an `Arduino808X` server over a serial port.
+/// A [CpuClient] represents a connection to an `ArduinoX86` server over a serial port.
 pub struct CpuClient {
     port: Rc<RefCell<Box<dyn serialport::SerialPort>>>,
 }
@@ -485,10 +486,10 @@ impl CpuClient {
                 new_port.clear(serialport::ClearBuffer::Input).unwrap();
                 if bytes_read == 9 {
                     let ver_text = str::from_utf8(&buf).unwrap();
-                    if ver_text.contains("ard8088") {
+                    if ver_text.contains("ardX86 ") {
                         let proto_ver = buf[7];
                         log::trace!(
-                            "Found an Arduino8088 server, protocol verison: {} on port {}",
+                            "Found an ArduinoX86 server, protocol verison: {} on port {}",
                             proto_ver,
                             port_info.port_name
                         );

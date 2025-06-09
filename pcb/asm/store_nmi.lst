@@ -1,0 +1,53 @@
+     1                                  ; store.asm
+     2                                  ; Original routine by Andreas Jonsson
+     3                                  ; https://github.com/andreas-jonsson/virtualxt/tree/develop/tools/validator/pi8088
+     4                                  ;
+     5                                  ; Assemble with nasm: 
+     6                                  ; nasm store.asm -o store.bin
+     7                                  
+     8                                  ; Registers are output in turn to dummy IO addresses, intercepted by the validator 
+     9                                  ; program. End of the routine is indicated by a write to IO address 0xFD.
+    10                                  
+    11                                  ; This routine is intended to run out of an NMI handler that terminates program
+    12                                  ; execution. Therefore IP, CS and FLAGS can be popped from the stack.
+    13                                  
+    14                                  cpu	8086
+    15                                  org	0h
+    16                                  
+    17 00000000 90<rep 6h>                  times 6 nop
+    18                                  
+    19 00000006 E7FE                        out     0xFE, ax        ; AX
+    20 00000008 89D8                        mov     ax, bx
+    21 0000000A E7FE                        out     0xFE, ax        ; BX
+    22 0000000C 89C8                        mov     ax, cx
+    23 0000000E E7FE                        out     0xFE, ax        ; CX
+    24 00000010 89D0                        mov     ax, dx
+    25 00000012 E7FE                        out     0xFE, ax        ; DX
+    26                                  
+    27 00000014 58                          pop     ax              ; Pop IP from the stack.
+    28 00000015 E7FE                        out     0xFE, ax        ; IP
+    29                                  
+    30 00000017 58                          pop     ax              ; Pop CS from the stack.
+    31 00000018 E7FE                        out     0xFE, ax        ; CS
+    32                                  
+    33 0000001A 58                          pop     ax              ; Pop Flags from the stack.
+    34 0000001B E7FE                        out     0xFE, ax        ; Flags
+    35                                  
+    36 0000001D 8CD0                        mov     ax, ss
+    37 0000001F E7FE                        out     0xFE, ax        ; SS
+    38 00000021 89E0                        mov     ax, sp
+    39 00000023 E7FE                        out     0xFE, ax        ; SP
+    40                                  
+    41 00000025 8CD8                        mov     ax, ds
+    42 00000027 E7FE                        out     0xFE, ax        ; DS
+    43 00000029 8CC0                        mov     ax, es
+    44 0000002B E7FE                        out     0xFE, ax        ; ES
+    45 0000002D 89E8                        mov     ax, bp
+    46 0000002F E7FE                        out     0xFE, ax        ; BP
+    47 00000031 89F0                        mov     ax, si
+    48 00000033 E7FE                        out     0xFE, ax        ; SI
+    49 00000035 89F8                        mov     ax, di
+    50 00000037 E7FE                        out     0xFE, ax        ; DI
+    51                                  
+    52 00000039 B0FF                        mov     al, 0xFF        ; Sent as a signal to the validator program that we are done.
+    53 0000003B E6FD                        out     0xFD, al        ; Done!

@@ -52,9 +52,15 @@ registers LOAD_REGISTERS = {
   0x0000, // DI
 };
 
+uint8_t SETUP_PROGRAM_86[] = { 0x90 }; // Not used 
+
 uint8_t SETUP_PROGRAM_186[] = {
-  0xb8, 0x00, 0x00, 0xba, 0x18, 0xff, 0xef , // MOV AX, 0 | MOV DX, FF18 | OUT DX, AX  ; Unmask Int0
+  0xb8, 0x00, 0x00, 0xba, 0x18, 0xff, 0xef, // MOV AX, 0 | MOV DX, FF18 | OUT DX, AX  ; Unmask Int0
+  0xEA, 0x00, 0x00, 0x00, 0x00, // FAR JUMP to [patched segment:0000]
 };
+
+#define SETUP_PATCH_VECTOR_OFFSET_186 10
+
 
 // Register load routine. This program gets patched with the client supplied register values.
 // It uses MOVs and POPs to set the register state as specified before the main program execution
@@ -67,22 +73,20 @@ uint8_t LOAD_PROGRAM[] = {
   0xC6, 0xB8, 0x00, 0x00, 0x89, 0xC7, 0xB8, 0x00, 0x00, 0xEA, 0x00, 0x00, 0x00, 0x00
 };
 
-#define REFRESH_CODE_OFFSET 0
-
 // Patch offsets for load program
-const size_t LOAD_BX = 0x0B + REFRESH_CODE_OFFSET;
-const size_t LOAD_CX = 0x0E + REFRESH_CODE_OFFSET;
-const size_t LOAD_DX = 0x11 + REFRESH_CODE_OFFSET;
-const size_t LOAD_SS = 0x14 + REFRESH_CODE_OFFSET;
-const size_t LOAD_DS = 0x19 + REFRESH_CODE_OFFSET;
-const size_t LOAD_ES = 0x1E + REFRESH_CODE_OFFSET;
-const size_t LOAD_SP = 0x23 + REFRESH_CODE_OFFSET;
-const size_t LOAD_BP = 0x28 + REFRESH_CODE_OFFSET;
-const size_t LOAD_SI = 0x2D + REFRESH_CODE_OFFSET;
-const size_t LOAD_DI = 0x32 + REFRESH_CODE_OFFSET;
-const size_t LOAD_AX = 0x37 + REFRESH_CODE_OFFSET;
-const size_t LOAD_IP = 0x3A + REFRESH_CODE_OFFSET;
-const size_t LOAD_CS = 0x3C + REFRESH_CODE_OFFSET;
+const size_t LOAD_BX = 0x0B;
+const size_t LOAD_CX = 0x0E;
+const size_t LOAD_DX = 0x11;
+const size_t LOAD_SS = 0x14;
+const size_t LOAD_DS = 0x19;
+const size_t LOAD_ES = 0x1E;
+const size_t LOAD_SP = 0x23;
+const size_t LOAD_BP = 0x28;
+const size_t LOAD_SI = 0x2D;
+const size_t LOAD_DI = 0x32;
+const size_t LOAD_AX = 0x37;
+const size_t LOAD_IP = 0x3A;
+const size_t LOAD_CS = 0x3C;
 
 // CPU ID program. This is pretty simple - Intel CPUs have the undocumented and very fast instruction
 // SALC at D6 - NEC CPUs have an undefined alias for XLAT that takes a lot longer. We can simply
@@ -120,18 +124,39 @@ const uint8_t EMU_EXIT_PROGRAM[] = {
 uint8_t JUMP_VECTOR[] = { 
   0xEA, 0x00, 0x00, 0x00, 0x00
 };
+#define JUMP_VECTOR_PATCH_OFFSET 3
+
+// NMI vector. Not really a program, but using the program read function to read the vector 
+// address is conveneient.
+uint8_t NMI_VECTOR[] = {
+  0x00, 0x00, 0x00, 0x00
+};
+#define NMI_VECTOR_PATCH_OFFSET 2
+
+// Storage to write to the stack during NMI 
+uint8_t NMI_STACK_BUFFER[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
 
 // Register store routine.
 // Six NOPs have been padded to the front of the STORE routine to hide it from appearing in cycle
 // traces.
-// We can probably think of a better way to hide STORE program bytes, as this adds several cycles.
+// We can probably think of a better way to hide STORE program bytes, as this adds several cycles
 const uint8_t STORE_PROGRAM[] = {
   0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-  0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x8C, 0xD0,
-  0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x04, 0x00, 0x89, 0xC4,
-  0x9C, 0xE8, 0x00, 0x00, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE,
-  0x89, 0xE8, 0xE7, 0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89, 0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFD
+  0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x58, 0xE7,
+  0xFE, 0x58, 0xE7, 0xFE, 0x58, 0xE7, 0xFE, 0x8C, 0xD0, 0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0x8C,
+  0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE, 0x89, 0xE8, 0xE7, 0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89,
+  0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFD
 };
+
+// const uint8_t STORE_PROGRAM[] = {
+//   0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+//   0xE7, 0xFE, 0x89, 0xD8, 0xE7, 0xFE, 0x89, 0xC8, 0xE7, 0xFE, 0x89, 0xD0, 0xE7, 0xFE, 0x8C, 0xD0,
+//   0xE7, 0xFE, 0x89, 0xE0, 0xE7, 0xFE, 0xB8, 0x00, 0x00, 0x8E, 0xD0, 0xB8, 0x04, 0x00, 0x89, 0xC4,
+//   0x9C, 0xE8, 0x00, 0x00, 0x8C, 0xC8, 0xE7, 0xFE, 0x8C, 0xD8, 0xE7, 0xFE, 0x8C, 0xC0, 0xE7, 0xFE,
+//   0x89, 0xE8, 0xE7, 0xFE, 0x89, 0xF0, 0xE7, 0xFE, 0x89, 0xF8, 0xE7, 0xFE, 0xB0, 0xFF, 0xE6, 0xFD
+// };
 
 const uint8_t NEC_PREFETCH_PROGRAM[] = {
   0x63, 0xC0
@@ -209,8 +234,10 @@ void setup() {
   digitalWrite(AEN_PIN, LOW); // AEN is enable-low
   digitalWrite(CEN_PIN, HIGH); // Command enable enables the outputs on the i8288
 
-  // Patch the reset vector jump program
-  patch_vector_pgm(JUMP_VECTOR, LOAD_SEG);
+  // Patch the jumps in programs that jump
+  patch_vector_pgm(JUMP_VECTOR, LOAD_SEG, JUMP_VECTOR_PATCH_OFFSET);
+  patch_vector_pgm(SETUP_PROGRAM, LOAD_SEG, SETUP_PROGRAM_PATCH_OFFSET);
+  patch_vector_pgm(NMI_VECTOR, STORE_SEG, NMI_VECTOR_PATCH_OFFSET);
 
   cpu_id();
 
@@ -431,7 +458,7 @@ bool cmd_cycle() {
 // CPU registers.
 // Registers should be loaded in the following order, little-endian:
 //
-// AX, BX, CX, DX, SS, SP, FLAGS, IP, CS, DS, ES, BP, SI, DI
+// AX, BX, CX, DX, IP, CS, FLAGS, SS, SP, DS, ES, BP, SI, DI
 bool cmd_load() {
 
   //Serial1.println(">> Got load!");
@@ -807,18 +834,34 @@ bool cmd_write_pin(void) {
 
     switch(pin_no) {
       case READY_PIN:
+        #if DEBUG_PIN_CMD
+          debugPrintColor(ansi::cyan, "Setting READY pin to: ");
+          debugPrintlnColor(ansi::cyan, pin_val);
+        #endif
         WRITE_READY_PIN(pin_val);
         break;
 
       case TEST_PIN:
+        #if DEBUG_PIN_CMD
+          debugPrintColor(ansi::cyan, "Setting TEST pin to: ");
+          debugPrintlnColor(ansi::cyan, pin_val);
+        #endif      
         WRITE_TEST_PIN(pin_val);
         break;
 
       case INTR_PIN:
+        #if DEBUG_PIN_CMD
+          debugPrintColor(ansi::cyan, "Setting INTR pin to: ");
+          debugPrintlnColor(ansi::cyan, pin_val);
+        #endif
         WRITE_INTR_PIN(pin_val);
         break;
 
       case NMI_PIN:
+        #if DEBUG_PIN_CMD
+          debugPrintColor(ansi::cyan, "Setting NMI pin to: ");
+          debugPrintlnColor(ansi::cyan, pin_val);
+        #endif          
         WRITE_NMI_PIN(pin_val);
         break;
       
@@ -915,8 +958,8 @@ bool cmd_prefetch(void) {
   return false;
 }
 
-void patch_vector_pgm(uint8_t *pgm, uint16_t seg) {
-  *((uint16_t *)&pgm[3]) = seg;
+void patch_vector_pgm(uint8_t *pgm, uint16_t seg, size_t offset) {
+  *((uint16_t *)&pgm[offset]) = seg;
 }
 
 void patch_load_pgm(uint8_t *pgm, registers_t *reg) {
@@ -1014,8 +1057,9 @@ void print_cpu_state() {
   char aiow_chr = !READ_AIOWC_PIN ? 'A' : '.';
   char iow_chr = !READ_IOWC_PIN ? 'W' : '.';
 
-  char intr_chr = '.';
+  char intr_chr = READ_INTR_PIN ? 'I' : '.';
   char inta_chr = '.';
+  char nmi_chr = READ_NMI_PIN ? 'N' : '.';
   char bhe_chr = !READ_BHE_PIN ? 'B' : '.';
 
   char v_chr = MACHINE_STATE_CHARS[(size_t)CPU.v_state];
@@ -1117,7 +1161,7 @@ void print_cpu_state() {
   snprintf(
     buf, 
     buf_len, 
-    "%08ld %c %s[%05lX][%05lX] %2s M:%c%c%c I:%c%c%c P:%c%c%c%c ", 
+    "%08ld %c %s[%05lX][%05lX] %2s M:%c%c%c I:%c%c%c P:%c%c%c%c%c ", 
     CYCLE_NUM, 
     v_chr, 
     ale_str,
@@ -1127,7 +1171,7 @@ void print_cpu_state() {
     seg_str,
     rs_chr, aws_chr, ws_chr,
     ior_chr, aiow_chr, iow_chr,
-    intr_chr, inta_chr, bhe_chr, rout_chr
+    intr_chr, inta_chr, nmi_chr, bhe_chr, rout_chr
   );
 
   Serial1.print(buf);
@@ -1207,15 +1251,18 @@ void change_state(machine_state_t new_state) {
       CPU.v_pc = 4;
       break;
     case Execute:
+      CPU.nmi_checkpoint = 0;
       CPU.v_pc = 0;
       CPU.s_pc = 0;
       if (CPU.do_emulation) {
         // Set v_pc to 4 to skip IVT segment:offset
         CPU.s_pc = 4;
       }
-      
       break;
     case ExecuteFinalize:
+      CPU.nmi_checkpoint = 0;
+      CPU.nmi_buf_cursor = 0; // Reset cursor for NMI stack buffer storage
+      CPU.v_pc = 0; // Reset PC for NMI vector "program"
       break;
     case ExecuteDone:
       break;
@@ -1225,6 +1272,8 @@ void change_state(machine_state_t new_state) {
       CPU.v_pc = 0;
       break;
     case Store:
+      reverse_stack_buf();
+      CPU.nmi_buf_cursor = 0; // Reset cursor for NMI stack buffer storage
       // Take a raw uint8_t pointer to the register struct. Both x86 and Arduino are little-endian,
       // so we can write raw incoming data over the struct. Faster than logic required to set
       // specific members. 
@@ -1283,11 +1332,32 @@ uint16_t read_program(const uint8_t *program, uint16_t *pc, uint32_t address, da
     }
     else {
       // Odd address. 
-      debugPrintlnColor(ansi::bright_red, "## Odd 16-bit read, shouldn't happen! ##");
+      debugPrintlnColor(ansi::bright_red, "## read_program(): Odd 16-bit read, shouldn't happen! ##");
     }
   }
 
   return data;
+}
+
+uint16_t write_buffer(uint8_t *buffer, uint16_t *cursor, uint16_t data, uint32_t address, data_width_t width) {
+  if (width == EightLow) {
+    buffer[(*cursor)++] = (uint8_t)data;
+  }
+  else if (width == EightHigh) {
+    buffer[(*cursor)++] = (uint8_t)(data >> 8);
+  }
+  else {
+    // 16-bit read. 
+    if ((address & 1) == 0) {
+      // Even address
+      buffer[(*cursor)++] = (uint8_t)data;
+      buffer[(*cursor)++] = (uint8_t)(data >> 8);
+    }
+    else {
+      // Odd address. 
+      debugPrintlnColor(ansi::bright_red, "## write_buffer(): Odd 16-bit read, shouldn't happen! ##");
+    }
+  }
 }
 
 // Simulate fetching NOPs based on bus width.
@@ -1304,16 +1374,25 @@ void set_data_bus_width() {
   if (!READ_BHE_PIN) {
     if ((CPU.address_latch & 1) == 0) {
       // BHE is active, and address is even. Bus width is 16.
+      #if DEBUG_BUS 
+        debugPrintlnColor(ansi::bright_yellow, "Bus width 16");
+      #endif
       CPU.data_width = Sixteen;
     }
     else {
       // BHE is active, and address is odd. Bus width is EightHigh.
+      #if DEBUG_BUS 
+        debugPrintlnColor(ansi::bright_yellow, "Bus width 8 (Odd)");
+      #endif      
       CPU.data_width = EightHigh;
     }
   }
   else {
     // If BHE is inactive, then we can't read an even address. So this must be 
     // EightLow.
+    #if DEBUG_BUS 
+      debugPrintlnColor(ansi::bright_yellow, "Bus width 8 (Even)");
+    #endif     
     CPU.data_width = EightLow;
   }
 }
@@ -1357,10 +1436,10 @@ void cycle() {
     // }
 
     CPU.bus_cycle = T1;
-    // Set the data bus width
-    set_data_bus_width();
     // Address lines are only valid when ALE is high, so latch address now.
     latch_address();
+    // Set the data bus width (must happen after latch)
+    set_data_bus_width();
     CPU.bus_state_latched = CPU.bus_state; 
     CPU.data_bus_resolved = false;
   }
@@ -1529,6 +1608,10 @@ void cycle() {
       handle_cpuid_state();
       break;
 
+    case CpuSetup:
+      handle_cpu_setup_state();
+      break;
+
     case JumpVector:
       // We are executing the initial jump from the reset vector FFFF:0000.
       // This is to avoid wrapping effective address during load procedure.
@@ -1549,102 +1632,19 @@ void cycle() {
 
     case EmuEnter:
       // We are executing the BRKEM routine.
-
-      if(!READ_MRDC_PIN) {
-        // CPU is reading (MRDC active-low)
-        if(CPU.bus_state == CODE) {      
-          // We are reading a code byte
-          if(CPU.v_pc < sizeof EMU_ENTER_PROGRAM) {
-            // Feed load program to CPU
-            CPU.data_bus = read_program(EMU_ENTER_PROGRAM, &CPU.v_pc, CPU.address_latch, CPU.data_width);
-            CPU.data_type = DATA_PROGRAM;
-          }
-          else {
-            // Ran out of program, so return NOP. 
-            CPU.data_bus = OPCODE_DOUBLENOP;
-            CPU.data_type = DATA_PROGRAM_END;
-            //change_state(LoadDone);
-          }
-          data_bus_write(CPU.data_bus, CPU.data_width);
-        }
-        
-        if(CPU.bus_state == MEMR) {
-          // We are reading from memory
-          // This will occur when BRKEM reads the emulation segment vector
-          uint32_t vector_base = BRKEM_VECTOR * 4;
-          if((CPU.address_latch >= vector_base ) && (CPU.address_latch < vector_base + 4)) {
-            if (CPU.address_latch < (vector_base + 2)) {
-              // Reading offset, feed IP
-              #if DEBUG_EMU
-                Serial1.println("## Reading BRKEM offset! ##");
-              #endif
-            }
-            else {
-              // Reading segment
-              #if DEBUG_EMU
-                Serial1.println("## Reading BRKEM segment! ##");
-              #endif
-            }
-            // Feed a dummy pc variable to read_program - the actual address is determined from 
-            // the address latch
-            uint16_t dummy_pc = (uint16_t)(CPU.address_latch - vector_base);
-            CPU.data_bus = read_program(EMU_ENTER_PROGRAM, &dummy_pc, CPU.address_latch, CPU.data_width);
-            CPU.data_type = DATA_PROGRAM;
-            data_bus_write(CPU.data_bus, CPU.data_width);
-          }
-          else {
-            // Unexpected read above address 0x00001
-            Serial1.println("## INVALID MEM READ DURING EMUENTER ##");
-          }
-        }
-      } 
-
-      if(!READ_MWTC_PIN) {
-        if (CPU.width == BusWidthEight) {
-          // Flags will be read in two operations
-          if (CPU.stack_w_op_ct == 0) {
-            #if DEBUG_EMU
-              Serial1.println("## Reading BRKEM flag push (1/2)! ##");
-            #endif
-            CPU.pre_emu_flags = (uint16_t)data_bus_read_byte();
-          }
-          else if (CPU.stack_w_op_ct == 1) {
-            #if DEBUG_EMU
-              Serial1.println("## Reading BRKEM flag push (2/2)! ##");
-            #endif      
-            CPU.pre_emu_flags |= ((uint16_t)data_bus_read_byte() << 8);
-          }
-          CPU.stack_w_op_ct++;
-        }
-        else {
-          // Flags will be read in one operation
-          if (CPU.stack_w_op_ct == 0) {
-            #if DEBUG_EMU
-              Serial1.println("## Reading BRKEM flag push! ##");
-            #endif
-            // CPU is writing to the data bus, latch value
-            CPU.data_bus = data_bus_read(CPU.data_width);
-            CPU.pre_emu_flags = CPU.data_bus;
-          }
-          CPU.stack_w_op_ct++;
-        }
-      }
-
-      if (q == QUEUE_FLUSHED) {
-        // Queue flush after final jump triggers next state.
-        CPU.in_emulation = true;
-        change_state(LoadDone);
-      }
-
+      handle_emu_enter_state(q);
       break;
 
     // Unlike in run_program, the Execute state in cpu_server is entirely interactive based on 
     // commands from the client. 
     // This is to support interception of memory reads & writes as instructions execute and to allow
     // the client to query CPU state as it wishes per cpu cycle.
-    // When done in the Execute state, a cpu client should execute the ExecuteFinalize command.
-    // This is typically done when a CODE fetch occurs past the end of the provided program, although
-    // other end conditions are possible.
+    // When done in the Execute state, a cpu client can end execution by:
+    //  - Executing an ExecuteFinalize command.
+    //    This is typically done when a CODE fetch occurs past the end of the provided program, although
+    //    other end conditions are possible.
+    //  - Executing a HALT
+    //  - Asserting NMI before the end of the instruction
     case Execute:
     
       if ((!READ_MRDC_PIN || !READ_IORC_PIN) && CPU.bus_state == PASV) {
@@ -1667,15 +1667,107 @@ void cycle() {
         // CPU is writing to the data bus, latch value
         CPU.data_bus = data_bus_read(CPU.data_width);
       }
+
+      if(CPU.bus_state == HALT) {
+        #if DEBUG_EXECUTE
+          debugPrintlnColor(ansi::green, "## EXECUTE: Detected HALT - Setting NMI high to end program execution.");
+        #endif
+        WRITE_NMI_PIN(1);
+        break;
+      }
       
+      if(READ_NMI_PIN) {
+        // Use checkpoint "1" to specify that NMI has been detected. This just prevents the debug message from 
+        // printing every cycle after NMI.
+        if(CPU.nmi_checkpoint == 0) {
+          #if DEBUG_EXECUTE
+            debugPrintlnColor(ansi::green, "## EXECUTE: Detected NMI high - Execute will end at IVT fetch.");
+          #endif
+          CPU.nmi_checkpoint = 1;
+        }
+        if (!CPU.data_bus_resolved && !READ_MRDC_PIN) {
+          // NMI is active and CPU is reading memory.  Let's check if it is the NMI handler.
+          if(CPU.address_latch == 0x00008) {
+            #if DEBUG_EXECUTE
+              debugPrintlnColor(ansi::green, "## EXECUTE: NMI high and fetching NMI IVT. Entering ExecuteFinalize...");
+            #endif
+            change_state(ExecuteFinalize);
+          }
+        }
+      }
+
       break;
 
-    // The ExecuteFinalize state is unique to the cpu_server. Since Execute is now an interactive state,
-    // we need to be able to transition safely from Execute to Store. ExecuteState feeds the CPU
-    // STORE program bytes flagged with DATA_PROGRAM_END and transitions to Store when one of those bytes
-    // is fetched as the first byte of an instruction.
+    // Since Execute is an interactive state where the client controls the cpu_server, we need to be able 
+    // to transition safely from Execute to Store. 
+    // ExecuteFinalize state feeds the CPU STORE program bytes flagged with DATA_PROGRAM_END and 
+    // transitions to Store when one of those bytes is fetched as the first byte of an instruction.
+    //
+    // If NMI is high during ExecuteFinalize, reading the NMI vector completely will reset the store program
+    // PC and also transition to ExecuteDone. This is the newer method of ending program execution that 
+    // supports the 80186 without queue status lines.
     case ExecuteFinalize:
       
+      if(READ_NMI_PIN) {
+        if (!CPU.data_bus_resolved && !READ_MRDC_PIN) {
+          // NMI is active and CPU is reading memory.  Let's check if it is the NMI handler.
+          if(CPU.address_latch == 0x00008) {
+            CPU.nmi_checkpoint = 1;
+          }
+
+          if (CPU.bus_state_latched == CODE) {
+            // CPU is reading CODE in ExecuteFinalize with NMI high.
+            // This should hopefully be at the address of the NMI vector, so we can enter ExecuteDone
+            run_address = calc_flat_address(STORE_SEG, 0);
+            if(CPU.address_latch == run_address) {
+              #if DEBUG_EXECUTE
+                debugPrintlnColor(ansi::green, "## EXECUTE_FINALIZE: Fetch at STORE_SEG.");
+              #endif
+              change_state(ExecuteDone);
+            }
+          }
+          else if(CPU.nmi_checkpoint > 0 && CPU.v_pc < sizeof(NMI_VECTOR)) {
+            // Feed the CPU the NMI vector.
+            CPU.data_bus = read_program(NMI_VECTOR, &CPU.v_pc, CPU.address_latch, CPU.data_width);
+            #if DEBUG_EXECUTE
+              debugPrintColor(ansi::green, "## EXECUTE_FINALIZE: Feeding CPU reset vector data: ");
+              debugPrintColor(ansi::green, CPU.data_bus, 16);
+              debugPrintColor(ansi::green, " new v_pc: ");
+              debugPrintlnColor(ansi::green, CPU.v_pc);
+            #endif
+            CPU.data_bus_resolved = true;
+            data_bus_write(CPU.data_bus, CPU.data_width);
+
+            if(CPU.nmi_checkpoint == 1 && CPU.address_latch == 0x0000A) {
+              #if DEBUG_EXECUTE
+                debugPrintlnColor(ansi::green, "## EXECUTE_FINALIZE: Read of NMI IVT with NMI pin high - Resetting STORE PC");
+              #endif
+              CPU.nmi_checkpoint = 2;
+              CPU.data_bus_resolved = true;
+              CPU.s_pc = 0;
+            }
+            break;
+          }
+        }
+
+        if (!CPU.data_bus_resolved && !READ_MWTC_PIN && CPU.nmi_checkpoint > 1) {
+          // NMI is active and CPU is writing memory. Probably to stack.
+          CPU.data_bus = data_bus_read(CPU.data_width);
+          write_buffer(NMI_STACK_BUFFER, &CPU.nmi_buf_cursor, CPU.data_bus, CPU.address_latch, CPU.data_width);
+          #if DEBUG_EXECUTE
+            debugPrintColor(ansi::green, "## EXECUTE_FINALIZE: Stack write: ");
+            debugPrintColor(ansi::green, CPU.data_bus, 16);
+            debugPrintColor(ansi::green, " New buf cursor: ");
+            debugPrintlnColor(ansi::green, CPU.nmi_buf_cursor);
+          #endif
+
+          
+          CPU.data_bus_resolved = true;
+        }
+      }
+
+ 
+
       if (!READ_MRDC_PIN && CPU.bus_state == PASV) {
         // CPU is reading (MRDC active-low)
         if (CPU.bus_state_latched == CODE) {
@@ -1695,7 +1787,7 @@ void cycle() {
           CPU.data_type = DATA_PROGRAM_END;
           data_bus_write(CPU.data_bus, CPU.data_width);
           #if DEBUG_STORE
-            debugPrintColor(ansi::green, "ExecuteFinalize: Wrote next PGM word to bus: ");
+            debugPrintColor(ansi::green, "## EXECUTE_FINALIZE: Wrote next PGM word to bus: ");
             debugPrintColor(ansi::green, CPU.data_bus, 16);
             debugPrintColor(ansi::green, " new s_pc: ");
             debugPrintlnColor(ansi::green, CPU.s_pc);
@@ -1901,10 +1993,10 @@ void cycle() {
             //CPU.data_bus = STORE_PROGRAM[CPU.s_pc++];
             CPU.data_bus = read_program(STORE_PROGRAM, &CPU.s_pc, CPU.address_latch, CPU.data_width);
             #if DEBUG_STORE
-              Serial1.print("## STORE: fetching code: ");
-              Serial1.print(CPU.data_bus, 16);
-              Serial1.print(" new s_pc: ");
-              Serial1.println(CPU.s_pc);
+              debugPrintColor(ansi::magenta, "## STORE: fetching code: ");
+              debugPrintColor(ansi::magenta, CPU.data_bus, 16);
+              debugPrintColor(ansi::magenta, " new s_pc: ");
+              debugPrintlnColor(ansi::magenta, CPU.s_pc);
             #endif
             CPU.data_type = DATA_PROGRAM;
 
@@ -1914,12 +2006,22 @@ void cycle() {
             CPU.data_type = DATA_PROGRAM_END;
           }
         }
+        else {
+          // CPU is reading something else. Stack?
+          CPU.data_bus = read_program(NMI_STACK_BUFFER, &CPU.nmi_buf_cursor, CPU.address_latch, CPU.data_width);
+          #if DEBUG_STORE
+            debugPrintColor(ansi::magenta, "## STORE: Reading from stack: ");
+            debugPrintColor(ansi::magenta, CPU.data_bus, 16);
+            debugPrintColor(ansi::magenta, " new cursor: ");
+            debugPrintlnColor(ansi::magenta, CPU.nmi_buf_cursor);
+          #endif
+        }
         data_bus_write(CPU.data_bus, CPU.data_width);
       }
 
       // CPU is writing to memory address - this should only happen during readback when
       // the flags register is pushed to the stack (The only way to read the full flags)      
-      if(!READ_MWTC_PIN) {
+      if(!READ_MWTC_PIN && CPU.bus_state != PASV) {
         CPU.data_bus = data_bus_read(CPU.data_width);
 
         // Store program sets up SS:SP as 0:4, so write should be to the first four memory
@@ -1927,7 +2029,7 @@ void cycle() {
         if(CPU.address_latch < 0x00004) {
 
           #if DEBUG_STORE
-            Serial1.println("## STORE Stack Push");
+            debugPrintlnColor(ansi::magenta, "## STORE Stack Push");
           #endif
 
           // Write flags and IP to the register struct
@@ -1940,7 +2042,7 @@ void cycle() {
           }
           else if (CPU.data_width == EightHigh) {
             // We shouldn't have unaligned stack access during STORE. Something has gone wrong.
-            Serial1.println("## Bad Data Bus Width during Store: EightHigh");
+            debugPrintlnColor(ansi::bright_red, "## Bad Data Bus Width during Store: EightHigh");
           }
           else {
             // 16-bit data bus
@@ -1949,8 +2051,8 @@ void cycle() {
               // captured in 8080 mode for the native flags now.
               CPU.data_bus = (CPU.data_bus & 0xFF00) | (uint16_t)CPU.emu_flags;
               #if DEBUG_EMU
-                Serial1.print("## Substituting 8080 flags in stack read: ");
-                Serial1.println(CPU.data_bus, 16);
+                debugPrintColor(ansi::magenta, "## Substituting 8080 flags in stack read: ");
+                debugPrintlnColor(ansi::magenta, CPU.data_bus, 16);
               #endif
               
             }
@@ -1961,35 +2063,34 @@ void cycle() {
 
             #if DEBUG_EMU
               uint16_t *flags_ptr = (uint16_t *)&CPU.post_regs.flags;          
-              Serial1.print("## New flags are: ");
-              Serial1.println(*flags_ptr, 16);
-              Serial1.print("## Readback ptr diff: ");
-              Serial1.println(diff);
+              debugPrintColor(ansi::magenta, "## New flags are: ");
+              debugPrintColor(ansi::magenta, *flags_ptr, 16);
+              debugPrintColor(ansi::magenta, "## Readback ptr diff: ");
+              debugPrintlnColor(ansi::magenta, diff);
             #endif
           }
         }
         else {
           // We shouldn't be writing to any other addresses, something wrong happened
           if (CPU.address_latch == 0x00004) {
-            Serial1.println("## TRAP detected in Store operation! Invalid flags?");
+            debugPrintlnColor(ansi::bright_red, "## TRAP detected in Store operation! Invalid flags?");
           }
 
-          Serial1.println("## INVALID STORE WRITE: ");
-          Serial1.println(CPU.address_latch, HEX);
-          set_error("Invalid store write");
+          debugPrintColor(ansi::bright_red, "## INVALID STORE MEMORY WRITE: ");
+          debugPrintlnColor(ansi::bright_red, CPU.address_latch, HEX);
+          set_error("Invalid store memory write");
           // TODO: handle error gracefully
         }
         #if DEBUG_STORE
-          Serial1.print("## Store memory write: ");
-          Serial1.println(CPU.data_bus, HEX);
+          debugPrintColor(ansi::magenta, "## STORE: memory write: ");
+          debugPrintlnColor(ansi::magenta, CPU.data_bus, HEX);
         #endif
       }
 
       // CPU is writing to IO address - this indicates we are saving a register value. 
       // We structured the register struct in the right order, so we can overwrite it
       // directly.
-      if(!READ_IOWC_PIN) {
-
+      if(!READ_IOWC_PIN && CPU.bus_state != PASV) {
         if(CPU.address_latch == 0xFD) {
           // Write to 0xFD indicates end of store procedure.
           
@@ -1999,7 +2100,7 @@ void cycle() {
             Serial1.println(CPU.post_regs.ip, HEX);
           #endif            
           //CPU.post_regs.ip -= 0x24;
-          CPU.post_regs.ip -= (0x24 + 6); // added 6 NOPs to start of STORE program
+          //CPU.post_regs.ip -= (0x24 + 6); // added 6 NOPs to start of STORE program
           
           change_state(StoreDone);
         }
@@ -2019,8 +2120,8 @@ void cycle() {
           }
 
           #if DEBUG_STORE
-            Serial1.print("## Store IO write: ");
-            Serial1.println(CPU.data_bus, HEX);
+            debugPrintColor(ansi::bright_magenta, "## STORE: IO write: ");
+            debugPrintlnColor(ansi::bright_magenta, CPU.data_bus, HEX);
           #endif
         }
       }
@@ -2064,6 +2165,11 @@ void cycle() {
         print_cpu_state();
       #endif
       break;      
+    case CpuSetup:
+      #if TRACE_SETUP
+        print_cpu_state();
+      #endif
+      break;
     case JumpVector:
       #if TRACE_VECTOR
         print_cpu_state();
@@ -2156,14 +2262,62 @@ void handle_cpuid_state() {
         CPU.data_type = DATA_PROGRAM;
         data_bus_write(CPU.data_bus, CPU.data_width);
         // Immediately change to next state.
-        #if USE_LOAD_SEG  
-          change_state(JumpVector);
+        #if USE_SETUP_PROGRAM
+          change_state(CpuSetup);
         #else
-          change_state(Load);
+          change_state(JumpVector);
         #endif
       }
     }
   }
+}
+
+// Handle the CpuSetup state. 
+// This state is not for register loading, but to handle CPUs that require some configuration before
+// they can be used by the cpu_server. Currently the only CPUs that need setup are the 188 and 186 
+// which have to have interrupts enabled via the PCB as they are masked off at RESET.
+void handle_cpu_setup_state() {
+  if(!READ_MRDC_PIN) {
+    // CPU is reading (MRDC active-low)      
+    if(CPU.bus_state == CODE) {    
+      // We are reading a code byte
+
+      // Feed the program if we haven't this bus cycle.
+      if (!CPU.data_bus_resolved) {
+        if(CPU.v_pc < sizeof SETUP_PROGRAM) {
+          // Feed SETUP_PROGRAM instruction to CPU.
+          CPU.data_bus = read_program(SETUP_PROGRAM, &CPU.v_pc, CPU.address_latch, CPU.data_width);
+          CPU.data_type = DATA_PROGRAM;
+          data_bus_write(CPU.data_bus, CPU.data_width);
+        }
+        else {
+          // Ran out of program, so return NOP. Doesn't matter what we feed
+          // as queue will be reset.
+          CPU.data_bus = read_nops(CPU.data_width);
+          CPU.data_type = DATA_PROGRAM_END;
+        }
+        #if DEBUG_SETUP
+          debugPrintColor(ansi::cyan, "## Writing SETUP_PROGRAM program to bus: ");
+          debugPrintlnColor(ansi::cyan, CPU.data_bus, 16);
+        #endif
+        CPU.data_bus_resolved = true;
+        data_bus_write(CPU.data_bus, CPU.data_width);
+      }
+    }
+  }
+
+  if(READ_ALE_PIN) {
+    // Jump is finished on first address latch of LOAD_SEG:0
+    uint32_t dest = calc_flat_address(LOAD_SEG, 0);
+    if(dest == CPU.address_latch) {
+      #if DEBUG_SETUP
+        debugPrintColor(ansi::cyan, "## ALE at LOAD_SEG. Transitioning to Load state. SEG: ");
+        debugPrintlnColor(ansi::cyan, CPU.address_latch, 16);
+      #endif
+      // Transition to Load state.
+      change_state(Load);
+    }
+  }   
 }
 
 void handle_jump_vector_state(uint8_t q) {
@@ -2271,7 +2425,7 @@ void handle_load_state(uint8_t q) {
       // This should only occur during Load when flags are popped from 0:0
       if(CPU.address_latch < 0x00002 ) {
         // First two bytes of LOAD_PROGRAM were patched with flags
-        uint16_t dummy_pc = (uint16_t)CPU.address_latch + REFRESH_CODE_OFFSET;
+        uint16_t dummy_pc = (uint16_t)CPU.address_latch;
         CPU.data_bus = read_program(LOAD_PROGRAM, &dummy_pc, CPU.address_latch, CPU.data_width);
         CPU.data_type = DATA_PROGRAM;
         data_bus_write(CPU.data_bus, CPU.data_width);
@@ -2324,6 +2478,103 @@ void handle_load_done_state() {
     }
   }
 }
+
+void handle_emu_enter_state(uint8_t q) {
+  if(!READ_MRDC_PIN) {
+    // CPU is reading (MRDC active-low)
+    if(CPU.bus_state == CODE) {      
+      // We are reading a code byte
+      if(CPU.v_pc < sizeof EMU_ENTER_PROGRAM) {
+        // Feed load program to CPU
+        CPU.data_bus = read_program(EMU_ENTER_PROGRAM, &CPU.v_pc, CPU.address_latch, CPU.data_width);
+        CPU.data_type = DATA_PROGRAM;
+      }
+      else {
+        // Ran out of program, so return NOP. 
+        CPU.data_bus = OPCODE_DOUBLENOP;
+        CPU.data_type = DATA_PROGRAM_END;
+        //change_state(LoadDone);
+      }
+      data_bus_write(CPU.data_bus, CPU.data_width);
+    }
+    
+    if(CPU.bus_state == MEMR) {
+      // We are reading from memory
+      // This will occur when BRKEM reads the emulation segment vector
+      uint32_t vector_base = BRKEM_VECTOR * 4;
+      if((CPU.address_latch >= vector_base ) && (CPU.address_latch < vector_base + 4)) {
+        if (CPU.address_latch < (vector_base + 2)) {
+          // Reading offset, feed IP
+          #if DEBUG_EMU
+            Serial1.println("## Reading BRKEM offset! ##");
+          #endif
+        }
+        else {
+          // Reading segment
+          #if DEBUG_EMU
+            Serial1.println("## Reading BRKEM segment! ##");
+          #endif
+        }
+        // Feed a dummy pc variable to read_program - the actual address is determined from 
+        // the address latch
+        uint16_t dummy_pc = (uint16_t)(CPU.address_latch - vector_base);
+        CPU.data_bus = read_program(EMU_ENTER_PROGRAM, &dummy_pc, CPU.address_latch, CPU.data_width);
+        CPU.data_type = DATA_PROGRAM;
+        data_bus_write(CPU.data_bus, CPU.data_width);
+      }
+      else {
+        // Unexpected read above address 0x00001
+        Serial1.println("## INVALID MEM READ DURING EMUENTER ##");
+      }
+    }
+  } 
+
+  if(!READ_MWTC_PIN) {
+    if (CPU.width == BusWidthEight) {
+      // Flags will be read in two operations
+      if (CPU.stack_w_op_ct == 0) {
+        #if DEBUG_EMU
+          Serial1.println("## Reading BRKEM flag push (1/2)! ##");
+        #endif
+        CPU.pre_emu_flags = (uint16_t)data_bus_read_byte();
+      }
+      else if (CPU.stack_w_op_ct == 1) {
+        #if DEBUG_EMU
+          Serial1.println("## Reading BRKEM flag push (2/2)! ##");
+        #endif      
+        CPU.pre_emu_flags |= ((uint16_t)data_bus_read_byte() << 8);
+      }
+      CPU.stack_w_op_ct++;
+    }
+    else {
+      // Flags will be read in one operation
+      if (CPU.stack_w_op_ct == 0) {
+        #if DEBUG_EMU
+          Serial1.println("## Reading BRKEM flag push! ##");
+        #endif
+        // CPU is writing to the data bus, latch value
+        CPU.data_bus = data_bus_read(CPU.data_width);
+        CPU.pre_emu_flags = CPU.data_bus;
+      }
+      CPU.stack_w_op_ct++;
+    }
+  }
+
+  if (q == QUEUE_FLUSHED) {
+    // Queue flush after final jump triggers next state.
+    CPU.in_emulation = true;
+    change_state(LoadDone);
+  }
+}
+
+// Reverse the order of the stack buffer.
+void reverse_stack_buf() {
+  uint16_t temp;
+  temp = ((uint16_t *)NMI_STACK_BUFFER)[2];
+  ((uint16_t *)NMI_STACK_BUFFER)[2] = ((uint16_t *)NMI_STACK_BUFFER)[0];
+  ((uint16_t *)NMI_STACK_BUFFER)[0] = temp;
+}
+
 
 // Return true if the current m-cycle has finished
 bool transfer_done() {

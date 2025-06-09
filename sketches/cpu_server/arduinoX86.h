@@ -47,6 +47,10 @@
   // If you are using a newer 186 like an 80L186EB it won't have queue status lines.
   // Set this to 0 in that case to use alternate logic.
   #define HAVE_QUEUE_STATUS 0
+  // 80186 needs setup to enable interrupts. 
+  #define USE_SETUP_PROGRAM 1
+  #define SETUP_PROGRAM SETUP_PROGRAM_186
+  #define SETUP_PROGRAM_PATCH_OFFSET SETUP_PATCH_VECTOR_OFFSET_186
 #else
   // Non-186 CPU
   // How many cycles to hold the RESET signal high. Intel says "greater than 4" although 4 seems to work.
@@ -63,6 +67,10 @@
   #define EMULATE_8288 1
   // Leave this at 1 for non-186 CPUs as they will always have the queue status lines.
   #define HAVE_QUEUE_STATUS 1
+  // 8086 needs no setup. Disable entering CpuSetup state.
+  #define USE_SETUP_PROGRAM 0
+  #define SETUP_PROGRAM SETUP_PROGRAM_86
+  #define SETUP_PROGRAM_PATCH_OFFSET 0
 #endif
 
 // Define board type 
@@ -84,8 +92,11 @@
   #define FLUSH 
 #endif
 
-// Code segment to use for load program. User programs shouldn't jump here.
+// Code segment to use for load program.
 const uint16_t LOAD_SEG = 0xD000;
+const uint16_t STORE_SEG = 0xE000;
+
+const uint32_t NMI_ADDR = 0x00008;
 
 // Maximum size of the processor instruction queue. For 8088 == 4, 8086 == 6. 
 #define QUEUE_SIZE 6
@@ -182,17 +193,17 @@ const char *SEGMENT_STRINGS[] = {
   "ES", "SS", "CS", "DS"
 };
 
-// CPU Registers
+// CPU Registers (note: new organization for protocol v3)
 typedef struct registers {
   uint16_t ax;
   uint16_t bx;
   uint16_t cx;
   uint16_t dx;
-  uint16_t ss;
-  uint16_t sp;
-  uint16_t flags;
   uint16_t ip;
   uint16_t cs;
+  uint16_t flags;
+  uint16_t ss;
+  uint16_t sp;
   uint16_t ds;
   uint16_t es;
   uint16_t bp;
@@ -284,6 +295,8 @@ typedef struct cpu {
   uint8_t qt; // Last data type read from queue
   bool q_ff; // Did we fetch a first instruction byte from the queue this cycle?
   uint8_t q_fn; // What # byte of instruction did we fetch?
+  uint8_t nmi_checkpoint; // How many reads we have done at the NMI IVT address.
+  uint16_t nmi_buf_cursor;
 } Cpu;
 
 typedef struct i8288 {
@@ -394,6 +407,8 @@ const uint16_t CPU_FLAG_OVERFLOW   = 0b0000100000000000;
 #define READ_S5_PIN READ_PIN_D40
 #define READ_QS0_PIN READ_PIN_D09
 #define READ_QS1_PIN READ_PIN_D08
+#define READ_INTR_PIN READ_PIN_D12
+#define READ_NMI_PIN READ_PIN_D13
 
 #define READY_PIN 6
 #define TEST_PIN 7

@@ -46,10 +46,11 @@ pub struct InstructionQueue {
     back: usize,
     front: usize,
     q: Vec<QueueEntry>,
+    silent: bool,
 }
 
 impl InstructionQueue {
-    pub fn new(width: CpuWidth) -> Self {
+    pub fn new(width: CpuWidth, silent: bool) -> Self {
         Self {
             width,
             size: width.queue_size(),
@@ -64,6 +65,7 @@ impl InstructionQueue {
                 };
                 width.queue_size()
             ],
+            silent,
         }
     }
 
@@ -111,8 +113,9 @@ impl InstructionQueue {
                 }
             }
         } else {
-            //panic!("Queue overrun!");
-            log::error!("Queue overrun!");
+            if !self.silent {
+                log::error!("Queue overrun!");
+            }
         }
     }
 
@@ -124,9 +127,13 @@ impl InstructionQueue {
             self.back = (self.back + 1) % self.size;
             self.len -= 1;
 
-            return (q_entry.opcode, q_entry.dtype, q_entry.addr);
+            (q_entry.opcode, q_entry.dtype, q_entry.addr)
+        } else {
+            if !self.silent {
+                log::error!("Queue underrun!");
+            }
+            (0, QueueDataType::Program, 0)
         }
-        panic!("Queue underrun!");
     }
 
     pub fn flush(&mut self) {

@@ -31,7 +31,7 @@ mod remote_program;
 
 use std::str::FromStr;
 
-// Rexport the client module for convenience
+// Re-export the client module for convenience
 pub use ard808x_client;
 use ard808x_client::*;
 
@@ -160,20 +160,20 @@ impl RemoteCpuRegisters {
         buf[6] = (self.dx & 0xFF) as u8;
         buf[7] = ((self.dx >> 8) & 0xFF) as u8;
 
-        buf[8] = (self.ss & 0xFF) as u8;
-        buf[9] = ((self.ss >> 8) & 0xFF) as u8;
+        buf[8] = (self.ip & 0xFF) as u8;
+        buf[9] = ((self.ip >> 8) & 0xFF) as u8;
 
-        buf[10] = (self.sp & 0xFF) as u8;
-        buf[11] = ((self.sp >> 8) & 0xFF) as u8;
+        buf[10] = (self.cs & 0xFF) as u8;
+        buf[11] = ((self.cs >> 8) & 0xFF) as u8;
 
         buf[12] = (self.flags & 0xFF) as u8;
         buf[13] = ((self.flags >> 8) & 0xFF) as u8;
 
-        buf[14] = (self.ip & 0xFF) as u8;
-        buf[15] = ((self.ip >> 8) & 0xFF) as u8;
+        buf[14] = (self.ss & 0xFF) as u8;
+        buf[15] = ((self.ss >> 8) & 0xFF) as u8;
 
-        buf[16] = (self.cs & 0xFF) as u8;
-        buf[17] = ((self.cs >> 8) & 0xFF) as u8;
+        buf[16] = (self.sp & 0xFF) as u8;
+        buf[17] = ((self.sp >> 8) & 0xFF) as u8;
 
         buf[18] = (self.ds & 0xFF) as u8;
         buf[19] = ((self.ds >> 8) & 0xFF) as u8;
@@ -199,11 +199,11 @@ impl From<&[u8; 28]> for RemoteCpuRegisters {
             bx: buf[2] as u16 | ((buf[3] as u16) << 8),
             cx: buf[4] as u16 | ((buf[5] as u16) << 8),
             dx: buf[6] as u16 | ((buf[7] as u16) << 8),
-            ss: buf[8] as u16 | ((buf[9] as u16) << 8),
-            sp: buf[10] as u16 | ((buf[11] as u16) << 8),
+            ip: buf[8] as u16 | ((buf[9] as u16) << 8),
+            cs: buf[10] as u16 | ((buf[11] as u16) << 8),
             flags: buf[12] as u16 | ((buf[13] as u16) << 8),
-            ip: buf[14] as u16 | ((buf[15] as u16) << 8),
-            cs: buf[16] as u16 | ((buf[17] as u16) << 8),
+            ss: buf[14] as u16 | ((buf[15] as u16) << 8),
+            sp: buf[16] as u16 | ((buf[17] as u16) << 8),
             ds: buf[18] as u16 | ((buf[19] as u16) << 8),
             es: buf[20] as u16 | ((buf[21] as u16) << 8),
             bp: buf[22] as u16 | ((buf[23] as u16) << 8),
@@ -219,11 +219,11 @@ impl From<&[u8]> for RemoteCpuRegisters {
             bx: buf[2] as u16 | ((buf[3] as u16) << 8),
             cx: buf[4] as u16 | ((buf[5] as u16) << 8),
             dx: buf[6] as u16 | ((buf[7] as u16) << 8),
-            ss: buf[8] as u16 | ((buf[9] as u16) << 8),
-            sp: buf[10] as u16 | ((buf[11] as u16) << 8),
+            ip: buf[8] as u16 | ((buf[9] as u16) << 8),
+            cs: buf[10] as u16 | ((buf[11] as u16) << 8),
             flags: buf[12] as u16 | ((buf[13] as u16) << 8),
-            ip: buf[14] as u16 | ((buf[15] as u16) << 8),
-            cs: buf[16] as u16 | ((buf[17] as u16) << 8),
+            ss: buf[14] as u16 | ((buf[15] as u16) << 8),
+            sp: buf[16] as u16 | ((buf[17] as u16) << 8),
             ds: buf[18] as u16 | ((buf[19] as u16) << 8),
             es: buf[20] as u16 | ((buf[21] as u16) << 8),
             bp: buf[22] as u16 | ((buf[23] as u16) << 8),
@@ -462,7 +462,7 @@ impl RemoteCpu<'_> {
             nready_states: 0,
 
             have_queue_status,
-            queue: InstructionQueue::new(width),
+            queue: InstructionQueue::new(width, !have_queue_status),
             queue_byte: 0,
             queue_type: QueueDataType::Program,
             queue_first_fetch: true,
@@ -503,7 +503,7 @@ impl RemoteCpu<'_> {
         self.instruction_num = 0;
         self.mcycle_state = BusState::PASV;
         self.bus_cycle = BusCycle::T1;
-        self.queue = InstructionQueue::new(self.width);
+        self.queue = InstructionQueue::new(self.width, !self.have_queue_status);
         self.queue_byte = 0;
         self.queue_type = QueueDataType::Program;
         self.queue_first_fetch = true;
@@ -1039,30 +1039,32 @@ impl RemoteCpu<'_> {
                                 write_store = true;
                             }
                         }
+
+                        if write_store {
+                            // Execute prefetch_store command instead of writing to the data bus ourselves.
+                            log::trace!("Writing cpu_server store program byte to bus");
+                            self.client
+                                .prefetch_store()
+                                .expect("Failed to execute CmdPrefetchStore");
+                        } else {
+                            if !self.address_in_bounds() {
+                                log::warn!(
+                                    "Writing user program out of bounds. CPU desynchronized."
+                                );
+                            }
+                            log::trace!(
+                                "Writing [User] program word to bus: [{:04X}]",
+                                self.data_bus
+                            );
+                            self.client
+                                .write_data_bus(self.data_bus)
+                                .expect("Failed to write data bus.");
+                        }
                     }
                     _ => {
                         // Handle other states?
                         log::warn!("Unhandled bus state!");
                     }
-                }
-
-                if write_store {
-                    // Execute prefetch_store command instead of writing to the data bus ourselves.
-                    log::trace!("Writing cpu_server store program byte to bus");
-                    self.client
-                        .prefetch_store()
-                        .expect("Failed to execute CmdPrefetchStore");
-                } else {
-                    if !self.address_in_bounds() {
-                        log::warn!("Writing user program out of bounds. CPU desynchronized.");
-                    }
-                    log::trace!(
-                        "Writing [User] program word to bus: [{:04X}]",
-                        self.data_bus
-                    );
-                    self.client
-                        .write_data_bus(self.data_bus)
-                        .expect("Failed to write data bus.");
                 }
             }
 
@@ -1167,16 +1169,23 @@ impl RemoteCpu<'_> {
             }
         }
 
-        if self.halted {
-            self.halt_ct += 1;
-            if self.halt_ct == HALT_CYCLE_LIMIT {
-                cycle_comment!(self, "Setting INTR high to recover from halt...");
-                self.client
-                    .write_pin(CpuPin::INTR, true)
-                    .expect("Failed to write INTR pin!");
-                self.do_nmi = false;
-            }
-        }
+        // if self.halted {
+        //     self.halt_ct += 1;
+        //     if self.halt_ct == HALT_CYCLE_LIMIT {
+        //         // cycle_comment!(self, "Setting INTR high to recover from halt...");
+        //         // self.client
+        //         //     .write_pin(CpuPin::INTR, true)
+        //         //     .expect("Failed to write INTR pin!");
+        //         // self.intr = true;
+        //
+        //         cycle_comment!(self, "Setting NMI high to recover from halt...");
+        //         self.client
+        //             .write_pin(CpuPin::NMI, true)
+        //             .expect("Failed to write NMI pin!");
+        //         self.nmi = true;
+        //         self.do_nmi = false;
+        //     }
+        // }
         self.cycle_num += 1;
 
         // Do cycle-based INTR trigger
